@@ -1,0 +1,5 @@
+{
+  "name": "智专易 (PatentPro CN)",
+  "description": "智能中国专利申请辅助系统。集成了现有技术检索（基于Google Search）、专利成功率评估、自动化专利书撰写以及智能润色功能。",
+  "requestFramePermissions": []
+}
