@@ -12,9 +12,9 @@ interface SidebarProps {
 const Sidebar: React.FC<SidebarProps> = ({ currentView, setView, toggleChat, isChatOpen, hasActivePatent }) => {
   const navItems = [
     { id: AppView.DASHBOARD, label: '工作台', icon: 'M4 6h16M4 12h16M4 18h16' },
-    { id: AppView.NOVELTY_SEARCH, label: '新颖性评估', icon: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z' },
-    { id: AppView.DRAFTER, label: '智能撰写', icon: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z' },
-    { id: AppView.EDITOR, label: '文书润色', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
+    { id: AppView.NOVELTY_SEARCH, label: '交底采集', icon: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z' },
+    { id: AppView.DRAFTER, label: '策略起草', icon: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z' },
+    { id: AppView.EDITOR, label: '审校定稿', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
   ];
 
   return (
@@ -66,7 +66,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, setView, toggleChat, isC
            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
             </svg>
-            {isChatOpen ? '收起助手' : 'AI 专利顾问'}
+            {isChatOpen ? '收起助手' : 'AI 交底助手'}
         </button>
       </div>
     </div>

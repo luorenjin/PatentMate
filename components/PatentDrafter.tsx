@@ -1,18 +1,19 @@
 
 import React, { useState, useRef } from 'react';
-import { PatentData } from '../types';
-import { generatePatentSection, generatePatentDrawing, refineText } from '../services/geminiService';
+import { AppView, PatentData } from '../types';
+import { generateClaimStrategyPackage, generatePatentSection, generatePatentDrawing, refineText } from '../services/geminiService';
 import { renderMarkdown } from '../services/markdownService';
 import { RichTextEditor } from './RichTextEditor';
 
 interface PatentDrafterProps {
   patentData: PatentData;
   updatePatentData: (key: keyof PatentData, value: any) => void;
+    setView: (view: AppView) => void;
   onSave: () => void;
   onBack: () => void;
 }
 
-const PatentDrafter: React.FC<PatentDrafterProps> = ({ patentData, updatePatentData, onSave, onBack }) => {
+const PatentDrafter: React.FC<PatentDrafterProps> = ({ patentData, updatePatentData, setView, onSave, onBack }) => {
   const [activeSection, setActiveSection] = useState<keyof PatentData | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
@@ -28,7 +29,53 @@ const PatentDrafter: React.FC<PatentDrafterProps> = ({ patentData, updatePatentD
     { key: 'detailedDescription', label: '具体实施方式 (Detailed Description)', desc: '详细描述发明的实施细节，需充分公开。' },
   ];
 
+    const strategyRisksText = patentData.strategyRisks.join('\n');
+
+    const handleUpdateClaimStrategy = (value: string) => {
+        updatePatentData('claimStrategy', value);
+        updatePatentData('claimStrategyConfirmed', false);
+    };
+
+    const handleUpdateStrategyRisks = (value: string) => {
+        updatePatentData('strategyRisks', value.split('\n').map((item) => item.trim()).filter(Boolean));
+        updatePatentData('claimStrategyConfirmed', false);
+    };
+
+    const handleConfirmStrategy = () => {
+        if (!patentData.claimStrategy.trim()) {
+            alert('请先确认保护骨架内容，再进入正式起草。');
+            return;
+        }
+
+        if (patentData.technicalHighlights.length < 3) {
+            alert('关键技术特征不足，建议先返回交底采集补齐后再确认策略。');
+            return;
+        }
+
+        updatePatentData('claimStrategyConfirmed', true);
+        updatePatentData('status', 'drafting');
+    };
+
+    const handleRegenerateStrategy = async () => {
+        const strategyPackage = await generateClaimStrategyPackage(patentData);
+        updatePatentData('claimStrategy', strategyPackage.claimStrategy);
+        updatePatentData('independentClaimSkeleton', strategyPackage.independentClaimSkeleton);
+        updatePatentData('dependentClaimOptions', strategyPackage.dependentClaimOptions);
+        updatePatentData('strategyRisks', strategyPackage.strategyRisks);
+        updatePatentData('claimStrategyConfirmed', false);
+    };
+
+    const handleProceedToEditor = () => {
+        updatePatentData('status', 'editing');
+        setView(AppView.EDITOR);
+    };
+
   const handleGenerate = async (key: keyof PatentData, label: string) => {
+        if (!patentData.claimStrategyConfirmed) {
+                alert('请先确认左侧的保护策略，再开始生成章节。');
+                return;
+        }
+
     if (!patentData.title || !patentData.inventionContent) {
         alert("请先完善左侧的基础信息（至少需填写发明名称和核心方案）");
         return;
@@ -52,6 +99,11 @@ const PatentDrafter: React.FC<PatentDrafterProps> = ({ patentData, updatePatentD
   };
 
   const handleBatchGenerate = async () => {
+      if (!patentData.claimStrategyConfirmed) {
+          alert('请先确认保护策略，再执行一键起草。');
+          return;
+      }
+
       if (!patentData.title || !patentData.inventionContent) {
           alert("无法开始：请先在左侧填写“发明名称”和“发明内容”。");
           return;
@@ -167,16 +219,39 @@ const PatentDrafter: React.FC<PatentDrafterProps> = ({ patentData, updatePatentD
 
   return (
     <div className="h-full flex flex-col relative">
+       <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+              <div>
+                  <div className="text-xs uppercase tracking-[0.2em] text-sky-600 mb-2">Flow</div>
+                  <h2 className="text-xl font-bold text-slate-900">步骤 2：策略确认后起草</h2>
+                  <p className="text-sm text-slate-500 mt-2">先确认保护边界和风险，再批量生成权利要求、摘要和实施方式，避免直接从原始交底跳到文稿。</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-700">1. 交底采集完成</span>
+                  <span className={`px-3 py-1 rounded-full ${patentData.claimStrategyConfirmed ? 'bg-blue-600 text-white' : 'bg-amber-50 text-amber-700'}`}>
+                      2. {patentData.claimStrategyConfirmed ? '策略已确认' : '待确认保护策略'}
+                  </span>
+                  <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-600">3. 审校定稿</span>
+              </div>
+          </div>
+       </div>
+
        {/* Header */}
        <div className="flex justify-between items-center mb-6 flex-shrink-0">
           <button onClick={onBack} className="text-slate-500 hover:text-slate-800 flex items-center gap-2 font-medium">
              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
              返回工作台
           </button>
-           <button onClick={onSave} className="bg-white border border-slate-300 text-slate-700 px-4 py-2 rounded-lg font-medium hover:bg-slate-50 flex items-center gap-2">
+                     <div className="flex items-center gap-3">
+                     <button onClick={handleProceedToEditor} className="bg-slate-900 text-white px-4 py-2 rounded-lg font-medium hover:bg-slate-800 flex items-center gap-2">
+                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
+                         进入审校定稿
+                     </button>
+                     <button onClick={onSave} className="bg-white border border-slate-300 text-slate-700 px-4 py-2 rounded-lg font-medium hover:bg-slate-50 flex items-center gap-2">
              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>
              保存草稿
           </button>
+                     </div>
       </div>
 
       <div className="flex-1 flex flex-col md:flex-row gap-6 overflow-hidden pb-4">
@@ -240,6 +315,66 @@ const PatentDrafter: React.FC<PatentDrafterProps> = ({ patentData, updatePatentD
                 </div>
             </div>
             </div>
+
+            <div className="bg-slate-950 text-white p-6 rounded-xl shadow-sm border border-slate-900">
+                <div className="text-xs uppercase tracking-[0.2em] text-cyan-300 mb-3">Claim Strategy</div>
+                <h3 className="font-bold text-lg mb-3">起草保护骨架</h3>
+                <p className="text-sm text-slate-300 leading-relaxed mb-4">
+                    这里承接交底采集阶段整理出的必要技术特征。起草权利要求时，应优先围绕这些特征组织独立权利要求。
+                </p>
+                <textarea
+                    value={patentData.claimStrategy}
+                    onChange={(e) => handleUpdateClaimStrategy(e.target.value)}
+                    className="w-full min-h-[200px] rounded-xl border border-slate-700 bg-slate-900/70 px-4 py-3 text-sm leading-relaxed text-slate-100 outline-none focus:ring-2 focus:ring-cyan-400 resize-y"
+                    placeholder="在这里确认独立权利要求的必要技术特征、从属层级和保护边界。"
+                />
+                <div className="mt-4">
+                    <label className="block text-xs uppercase tracking-[0.15em] text-slate-400 mb-2">策略风险与待补强点</label>
+                    <textarea
+                        value={strategyRisksText}
+                        onChange={(e) => handleUpdateStrategyRisks(e.target.value)}
+                        className="w-full min-h-[120px] rounded-xl border border-slate-700 bg-slate-900/70 px-4 py-3 text-sm leading-relaxed text-slate-200 outline-none focus:ring-2 focus:ring-cyan-400 resize-y"
+                        placeholder="每行一条，记录保护边界不清、技术效果不足、实施例不够等风险。"
+                    />
+                </div>
+                <div className="mt-4 flex items-center justify-between gap-3">
+                    <div className={`text-sm font-medium ${patentData.claimStrategyConfirmed ? 'text-emerald-300' : 'text-amber-300'}`}>
+                        {patentData.claimStrategyConfirmed ? '保护策略已确认，可开始正式起草。' : '保护策略尚未确认，系统将阻止直接生成章节。'}
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={handleRegenerateStrategy}
+                            className="px-4 py-2 rounded-lg font-semibold bg-white/10 text-white hover:bg-white/20"
+                        >
+                            重新生成策略
+                        </button>
+                        <button
+                            onClick={handleConfirmStrategy}
+                            className={`px-4 py-2 rounded-lg font-semibold ${patentData.claimStrategyConfirmed ? 'bg-emerald-600 text-white' : 'bg-cyan-500 text-slate-950 hover:bg-cyan-400'}`}
+                        >
+                            {patentData.claimStrategyConfirmed ? '已确认策略' : '确认保护策略'}
+                        </button>
+                    </div>
+                </div>
+
+                {patentData.independentClaimSkeleton && (
+                    <div className="mt-4 pt-4 border-t border-slate-800">
+                        <div className="text-xs uppercase tracking-[0.15em] text-slate-400 mb-2">独立权利要求骨架</div>
+                        <pre className="whitespace-pre-wrap text-sm leading-relaxed font-sans text-slate-200">{patentData.independentClaimSkeleton}</pre>
+                    </div>
+                )}
+
+                {patentData.dependentClaimOptions.length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-slate-800">
+                        <div className="text-xs uppercase tracking-[0.15em] text-slate-400 mb-2">从属层级建议</div>
+                        <ul className="space-y-2 text-sm text-slate-200">
+                            {patentData.dependentClaimOptions.map((item) => (
+                                <li key={item}>• {item}</li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+            </div>
         </div>
 
         {/* Generation Column */}
@@ -251,7 +386,7 @@ const PatentDrafter: React.FC<PatentDrafterProps> = ({ patentData, updatePatentD
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                         </svg>
                     </span>
-                    步骤 2: 智能撰写
+                    步骤 2: 策略确认后起草
                 </h2>
                 
                 <button 
@@ -259,7 +394,7 @@ const PatentDrafter: React.FC<PatentDrafterProps> = ({ patentData, updatePatentD
                     onClick={handleBatchGenerate}
                     disabled={isGenerating || isBatchProcessing}
                     className={`px-4 py-2 rounded-lg font-semibold shadow-md transition-all flex items-center gap-2 ${
-                        isBatchProcessing || isGenerating 
+                        isBatchProcessing || isGenerating || !patentData.claimStrategyConfirmed
                         ? 'bg-slate-300 text-slate-500 cursor-not-allowed' 
                         : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 transform hover:-translate-y-0.5'
                     }`}
@@ -271,6 +406,11 @@ const PatentDrafter: React.FC<PatentDrafterProps> = ({ patentData, updatePatentD
                                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
                             正在一键生成全部...
+                        </>
+                    ) : !patentData.claimStrategyConfirmed ? (
+                        <>
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2h-1V9a5 5 0 00-10 0v2H6a2 2 0 00-2 2v6a2 2 0 002 2z" /></svg>
+                            先确认保护策略
                         </>
                     ) : (
                         <>

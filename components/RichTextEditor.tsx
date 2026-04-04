@@ -1,23 +1,52 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import katex from 'katex';
+import { renderMarkdown } from '../services/markdownService';
 
 interface RichTextEditorProps {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   className?: string;
+  format?: 'html' | 'markdown';
+  editorId?: string;
+  focusSignal?: number;
 }
 
-export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange, placeholder, className }) => {
+export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange, placeholder, className, format = 'html', editorId, focusSignal = 0 }) => {
   const editorRef = useRef<HTMLDivElement>(null);
-  const [mode, setMode] = useState<'rich' | 'source'>('rich');
+  const sourceRef = useRef<HTMLTextAreaElement>(null);
+  const [mode, setMode] = useState<'rich' | 'source'>(format === 'markdown' ? 'source' : 'rich');
   const [sourceContent, setSourceContent] = useState(value);
   const isLocked = useRef(false);
 
+  useEffect(() => {
+    setMode(format === 'markdown' ? 'source' : 'rich');
+  }, [format]);
+
+  useEffect(() => {
+    if (!focusSignal) {
+      return;
+    }
+
+    if (format === 'markdown') {
+      setMode('source');
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          sourceRef.current?.focus();
+        });
+      });
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      editorRef.current?.focus();
+    });
+  }, [focusSignal, format]);
+
   // Sync external value changes to editor
   useEffect(() => {
-    if (mode === 'rich' && editorRef.current && !isLocked.current) {
+    if (format === 'html' && mode === 'rich' && editorRef.current && !isLocked.current) {
        const currentHTML = editorRef.current.innerHTML;
        // Only update if significantly different to avoid cursor jumps
        if (value !== currentHTML) {
@@ -33,9 +62,9 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange,
   const handleInput = () => {
     if (editorRef.current) {
       isLocked.current = true;
-      const html = editorRef.current.innerHTML;
-      onChange(html);
-      setSourceContent(html);
+      const nextValue = format === 'markdown' ? sourceContent : editorRef.current.innerHTML;
+      onChange(nextValue);
+      setSourceContent(nextValue);
       setTimeout(() => { isLocked.current = false; }, 10);
     }
   };
@@ -48,7 +77,73 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange,
       setTimeout(() => { isLocked.current = false; }, 10);
   };
 
+  const applyMarkdownWrap = (prefix: string, suffix: string = prefix, placeholderText: string = '内容') => {
+    const textarea = document.activeElement instanceof HTMLTextAreaElement ? document.activeElement : null;
+    const currentValue = sourceContent;
+
+    if (!textarea) {
+      const appended = `${currentValue}${currentValue ? '\n' : ''}${prefix}${placeholderText}${suffix}`;
+      setSourceContent(appended);
+      onChange(appended);
+      return;
+    }
+
+    const selectionStart = textarea.selectionStart ?? 0;
+    const selectionEnd = textarea.selectionEnd ?? selectionStart;
+    const selectedText = currentValue.slice(selectionStart, selectionEnd) || placeholderText;
+    const nextValue = `${currentValue.slice(0, selectionStart)}${prefix}${selectedText}${suffix}${currentValue.slice(selectionEnd)}`;
+
+    setSourceContent(nextValue);
+    onChange(nextValue);
+
+    requestAnimationFrame(() => {
+      const caret = selectionStart + prefix.length + selectedText.length + suffix.length;
+      textarea.focus();
+      textarea.setSelectionRange(caret, caret);
+    });
+  };
+
+  const applyMarkdownLinePrefix = (prefix: string, placeholderText: string) => {
+    const textarea = document.activeElement instanceof HTMLTextAreaElement ? document.activeElement : null;
+    const currentValue = sourceContent;
+
+    if (!textarea) {
+      const appended = `${currentValue}${currentValue ? '\n' : ''}${prefix}${placeholderText}`;
+      setSourceContent(appended);
+      onChange(appended);
+      return;
+    }
+
+    const selectionStart = textarea.selectionStart ?? 0;
+    const selectionEnd = textarea.selectionEnd ?? selectionStart;
+    const selectedText = currentValue.slice(selectionStart, selectionEnd) || placeholderText;
+    const transformed = selectedText
+      .split('\n')
+      .map((line) => `${prefix}${line || placeholderText}`)
+      .join('\n');
+    const nextValue = `${currentValue.slice(0, selectionStart)}${transformed}${currentValue.slice(selectionEnd)}`;
+
+    setSourceContent(nextValue);
+    onChange(nextValue);
+
+    requestAnimationFrame(() => {
+      const caret = selectionStart + transformed.length;
+      textarea.focus();
+      textarea.setSelectionRange(caret, caret);
+    });
+  };
+
   const exec = (command: string, val: string | undefined = undefined) => {
+    if (format === 'markdown') {
+      if (command === 'bold') applyMarkdownWrap('**');
+      if (command === 'italic') applyMarkdownWrap('*');
+      if (command === 'underline') applyMarkdownWrap('<u>', '</u>');
+      if (command === 'insertUnorderedList') applyMarkdownLinePrefix('- ', '列表项');
+      if (command === 'insertOrderedList') applyMarkdownLinePrefix('1. ', '列表项');
+      if (command === 'formatBlock' && val === 'H3') applyMarkdownLinePrefix('### ', '小标题');
+      if (command === 'formatBlock' && val === 'P') applyMarkdownLinePrefix('', '段落');
+      return;
+    }
     document.execCommand(command, false, val);
     if (editorRef.current) {
         editorRef.current.focus();
@@ -67,8 +162,13 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange,
               // Insert HTML at cursor
               const span = `&nbsp;<span contenteditable="false" class="mx-1 inline-block select-all" data-latex="${latex}">${html}</span>&nbsp;`;
               
-              if (mode === 'source') {
-                 const newSource = sourceContent + span;
+                if (format === 'markdown') {
+                  const snippet = `$${latex}$`;
+                  const newSource = `${sourceContent}${sourceContent ? '\n' : ''}${snippet}`;
+                  setSourceContent(newSource);
+                  onChange(newSource);
+                } else if (mode === 'source') {
+                  const newSource = sourceContent + span;
                  setSourceContent(newSource);
                  onChange(newSource);
               } else {
@@ -97,7 +197,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange,
   );
 
   return (
-    <div className={`border border-slate-200 rounded-lg overflow-hidden bg-white flex flex-col shadow-sm focus-within:ring-2 focus-within:ring-blue-500/50 focus-within:border-blue-400 transition-all ${className}`}>
+    <div data-editor-id={editorId} className={`border border-slate-200 rounded-lg overflow-hidden bg-white flex flex-col shadow-sm focus-within:ring-2 focus-within:ring-blue-500/50 focus-within:border-blue-400 transition-all ${className}`}>
       <div className="flex items-center gap-1 p-2 border-b border-slate-100 bg-slate-50 text-slate-600 select-none flex-wrap">
         <Button cmd="bold" icon={<span className="font-serif font-bold text-sm">B</span>} title="加粗" />
         <Button cmd="italic" icon={<span className="font-serif italic text-sm">I</span>} title="斜体" />
@@ -129,19 +229,28 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange,
                 onClick={() => setMode('rich')}
                 className={`px-2 py-0.5 text-[10px] rounded font-medium ${mode === 'rich' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
             >
-                预览视图
+                {format === 'markdown' ? '预览' : '预览视图'}
             </button>
             <button
                 type="button"
                 onClick={() => setMode('source')}
                 className={`px-2 py-0.5 text-[10px] rounded font-medium ${mode === 'source' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
             >
-                源代码
+                {format === 'markdown' ? 'Markdown' : '源代码'}
             </button>
         </div>
       </div>
 
       {mode === 'rich' ? (
+        format === 'markdown' ? (
+          <div className="flex-1 p-4 overflow-y-auto prose prose-sm prose-slate max-w-none min-h-[200px] bg-white">
+            {sourceContent ? (
+              <div dangerouslySetInnerHTML={{ __html: renderMarkdown(sourceContent) }} />
+            ) : (
+              <div className="text-slate-400">{placeholder}</div>
+            )}
+          </div>
+        ) : (
           <div
             ref={editorRef}
             contentEditable
@@ -151,12 +260,14 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange,
             dangerouslySetInnerHTML={{ __html: sourceContent }}
             suppressContentEditableWarning
           />
+        )
       ) : (
           <textarea 
+            ref={sourceRef}
             value={sourceContent}
             onChange={handleSourceChange}
-            className="flex-1 p-4 outline-none overflow-y-auto font-mono text-xs bg-slate-800 text-slate-200 min-h-[200px] resize-none"
-            placeholder="在此处编辑 HTML 源代码..."
+            className={`flex-1 p-4 outline-none overflow-y-auto font-mono text-xs min-h-[200px] resize-none ${format === 'markdown' ? 'bg-white text-slate-800' : 'bg-slate-800 text-slate-200'}`}
+            placeholder={format === 'markdown' ? '在此处输入 Markdown 内容...' : '在此处编辑 HTML 源代码...'}
           />
       )}
     </div>

@@ -1,13 +1,14 @@
 
 import React, { useState, useMemo } from 'react';
-import { PatentData, ReviewResult, ReviewIssue } from '../types';
-import { refineText, runFinalPatentReview } from '../services/geminiService';
+import { AppView, PatentData, ReviewResult, ReviewIssue } from '../types';
+import { refineText, regenerateClaimStrategyFromReview, runFinalPatentReview } from '../services/geminiService';
 import { renderMarkdown } from '../services/markdownService';
 import { RichTextEditor } from './RichTextEditor';
 
 interface EditorProps {
   patentData: PatentData;
   updatePatentData: (key: keyof PatentData, value: any) => void;
+    setView: (view: AppView) => void;
   onSave: () => void;
   onBack: () => void;
 }
@@ -77,7 +78,7 @@ const formatTextWithNumbering = (content: string, startCount: number = 1): { htm
     return { html: <div className="pl-10">{elements}</div>, nextCount: currentCount };
 };
 
-const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, onSave, onBack }) => {
+const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, onSave, onBack }) => {
   const [selectedSection, setSelectedSection] = useState<keyof PatentData>('claims');
   const [processingType, setProcessingType] = useState<string | null>(null);
   
@@ -85,9 +86,67 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, onSave, o
   const [isReviewing, setIsReviewing] = useState(false);
   const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null);
   const [fixedIssueIndices, setFixedIssueIndices] = useState<number[]>([]); // Track which issues are fixed
+    const [isRegeneratingStrategy, setIsRegeneratingStrategy] = useState(false);
 
   // Preview State
   const [showPreview, setShowPreview] = useState(false);
+
+  const appendTextBlock = (current: string, title: string, content: string) => {
+      const block = `${title}\n- ${content}`;
+      if (current.includes(content)) return current;
+      return [current, block].filter(Boolean).join('\n\n');
+  };
+
+  const mergeStrategyRisk = (risk: string) => {
+      if (patentData.strategyRisks.includes(risk)) return;
+      updatePatentData('strategyRisks', [...patentData.strategyRisks, risk]);
+  };
+
+  const handleWriteBackToStrategy = (issue: ReviewIssue) => {
+      const strategyUpdate = appendTextBlock(
+          patentData.claimStrategy,
+          `【审查回写 - ${getSectionLabel(issue.section)}】`,
+          `${issue.issue}；修改方向：${stripHtml(renderMarkdown(issue.suggestion))}`,
+      );
+      updatePatentData('claimStrategy', strategyUpdate);
+      updatePatentData('claimStrategyConfirmed', false);
+      mergeStrategyRisk(issue.issue);
+  };
+
+  const handleWriteBackToDisclosure = (issue: ReviewIssue) => {
+      const disclosureUpdate = appendTextBlock(
+          patentData.disclosureSummary,
+          `【审查回写 - ${getSectionLabel(issue.section)}】`,
+          issue.issue,
+      );
+      updatePatentData('disclosureSummary', disclosureUpdate);
+      mergeStrategyRisk(issue.issue);
+  };
+
+  const handleWriteBackAllIssues = (target: 'strategy' | 'disclosure') => {
+      if (!reviewResult?.detailedIssues || reviewResult.detailedIssues.length === 0) return;
+      reviewResult.detailedIssues.forEach((issue) => {
+          if (target === 'strategy') {
+              handleWriteBackToStrategy(issue);
+          } else {
+              handleWriteBackToDisclosure(issue);
+          }
+      });
+  };
+
+  const handleRegenerateStrategyAfterWriteBack = async () => {
+      setIsRegeneratingStrategy(true);
+      try {
+          const result = await regenerateClaimStrategyFromReview(patentData);
+          updatePatentData('claimStrategy', result.claimStrategy);
+          updatePatentData('independentClaimSkeleton', result.independentClaimSkeleton);
+          updatePatentData('dependentClaimOptions', result.dependentClaimOptions);
+          updatePatentData('strategyRisks', result.strategyRisks);
+          updatePatentData('claimStrategyConfirmed', false);
+      } finally {
+          setIsRegeneratingStrategy(false);
+      }
+  };
 
   const handleRefine = async (type: 'expand' | 'polish' | 'fix_legal') => {
     const currentContent = patentData[selectedSection];
@@ -144,6 +203,14 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, onSave, o
       try {
           const result = await runFinalPatentReview(cleanData);
           setReviewResult(result);
+          updatePatentData('reviewSummary', result.feedback);
+          updatePatentData('lastReviewScore', result.score);
+          updatePatentData('status', 'editing');
+          if (Array.isArray(result.detailedIssues) && result.detailedIssues.length > 0) {
+              const mergedRisks = Array.from(new Set([...patentData.strategyRisks, ...result.detailedIssues.map((item) => item.issue)]));
+              updatePatentData('strategyRisks', mergedRisks);
+              updatePatentData('claimStrategyConfirmed', false);
+          }
       } finally {
           setIsReviewing(false);
       }
@@ -152,6 +219,8 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, onSave, o
   const handleMarkAsReady = () => {
       if (reviewResult?.passed) {
           updatePatentData('status', 'ready_to_submit');
+          updatePatentData('lastReviewScore', reviewResult.score);
+          updatePatentData('reviewSummary', reviewResult.feedback);
           onSave();
           alert("恭喜！该专利已标记为“待提交”并保存。");
       }
@@ -276,6 +345,25 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, onSave, o
 
   return (
     <div className="h-full flex flex-col relative">
+       <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+              <div>
+                  <div className="text-xs uppercase tracking-[0.2em] text-violet-600 mb-2">Flow</div>
+                  <h2 className="text-xl font-bold text-slate-900">步骤 3：审校定稿与回写</h2>
+                  <p className="text-sm text-slate-500 mt-2">这里不仅做章节润色，也把审查问题回写到交底摘要和保护策略，避免问题只停留在最终文稿层。</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-700">1. 交底采集</span>
+                  <button onClick={() => setView(AppView.DRAFTER)} className="px-3 py-1 rounded-full bg-sky-50 text-sky-700 hover:bg-sky-100">
+                      2. 返回策略起草
+                  </button>
+                  <span className={`px-3 py-1 rounded-full ${patentData.status === 'ready_to_submit' ? 'bg-green-600 text-white' : 'bg-violet-50 text-violet-700'}`}>
+                      3. {patentData.status === 'ready_to_submit' ? '已定稿待提交' : '审校定稿中'}
+                  </span>
+              </div>
+          </div>
+       </div>
+
        {/* Header Actions */}
        <div className="flex justify-between items-center mb-6 flex-shrink-0">
           <div className="flex items-center gap-4">
@@ -370,6 +458,25 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, onSave, o
                  <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
                      <span className="text-xl">⚖️</span> AI 审查员
                  </h3>
+
+                 <div className="mb-4 p-3 bg-slate-50 rounded-lg border border-slate-100 flex-shrink-0">
+                    <div className="text-xs font-bold text-slate-500 mb-1">策略同步状态</div>
+                    <div className="text-xs text-slate-700 leading-relaxed">
+                        {patentData.claimStrategyConfirmed ? '保护策略已确认' : '保护策略待重新确认'}
+                    </div>
+                    {patentData.reviewSummary && (
+                        <div className="mt-2 text-xs text-slate-600 leading-relaxed">
+                            最近一次审查：{patentData.reviewSummary}
+                        </div>
+                    )}
+                    <button
+                        onClick={handleRegenerateStrategyAfterWriteBack}
+                        disabled={isRegeneratingStrategy}
+                        className="mt-3 w-full py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-50"
+                    >
+                        {isRegeneratingStrategy ? '正在重生保护策略...' : '根据回写结果自动重生保护策略'}
+                    </button>
+                 </div>
                  
                  {reviewResult ? (
                      <div className="flex-1 flex flex-col gap-4 overflow-y-auto pr-1">
@@ -381,6 +488,21 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, onSave, o
                          <div className="p-3 bg-slate-50 rounded-lg border border-slate-100 flex-shrink-0">
                              <p className="text-xs font-bold text-slate-500 mb-1">整体评价</p>
                              <p className="text-xs text-slate-700 leading-relaxed">{reviewResult.feedback}</p>
+                         </div>
+
+                         <div className="grid grid-cols-2 gap-2">
+                            <button
+                                onClick={() => handleWriteBackAllIssues('strategy')}
+                                className="py-2 px-3 rounded-lg bg-sky-50 text-sky-700 text-xs font-semibold hover:bg-sky-100 border border-sky-100"
+                            >
+                                回写全部问题到保护策略
+                            </button>
+                            <button
+                                onClick={() => handleWriteBackAllIssues('disclosure')}
+                                className="py-2 px-3 rounded-lg bg-amber-50 text-amber-700 text-xs font-semibold hover:bg-amber-100 border border-amber-100"
+                            >
+                                回写全部问题到交底摘要
+                            </button>
                          </div>
 
                          {reviewResult.detailedIssues && Array.isArray(reviewResult.detailedIssues) && reviewResult.detailedIssues.length > 0 && (
@@ -405,13 +527,29 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, onSave, o
                                              {issue.issue}
                                          </p>
                                          {!isFixed ? (
-                                             <button 
-                                                onClick={() => handleApplyFix(issue, idx)}
-                                                className="w-full py-2 bg-white border border-red-200 text-red-600 text-xs font-bold rounded hover:bg-red-600 hover:text-white transition-colors flex items-center justify-center gap-1"
-                                             >
-                                                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                                                 应用 AI 修正建议
-                                             </button>
+                                             <div className="space-y-2">
+                                                <button 
+                                                    onClick={() => handleApplyFix(issue, idx)}
+                                                    className="w-full py-2 bg-white border border-red-200 text-red-600 text-xs font-bold rounded hover:bg-red-600 hover:text-white transition-colors flex items-center justify-center gap-1"
+                                                >
+                                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                                                    应用 AI 修正建议
+                                                </button>
+                                                <div className="grid grid-cols-2 gap-2">
+                                                    <button
+                                                        onClick={() => handleWriteBackToStrategy(issue)}
+                                                        className="py-1.5 bg-sky-50 border border-sky-100 text-sky-700 text-xs font-semibold rounded hover:bg-sky-100"
+                                                    >
+                                                        回写策略
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleWriteBackToDisclosure(issue)}
+                                                        className="py-1.5 bg-amber-50 border border-amber-100 text-amber-700 text-xs font-semibold rounded hover:bg-amber-100"
+                                                    >
+                                                        回写交底
+                                                    </button>
+                                                </div>
+                                             </div>
                                          ) : (
                                              <button disabled className="w-full py-1.5 bg-green-100 text-green-700 text-xs font-semibold rounded cursor-default flex items-center justify-center gap-1">
                                                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>

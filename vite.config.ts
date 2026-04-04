@@ -10,6 +10,30 @@ export default defineConfig(({ mode }) => {
       host: "0.0.0.0",
     },
     plugins: [react()],
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (
+              id.includes("node_modules/react") ||
+              id.includes("node_modules/react-dom")
+            ) {
+              return "react";
+            }
+            if (id.includes("@google/genai")) {
+              return "ai";
+            }
+            if (
+              id.includes("node_modules/marked") ||
+              id.includes("node_modules/katex")
+            ) {
+              return "markdown";
+            }
+            return undefined;
+          },
+        },
+      },
+    },
     define: {
       "process.env.API_KEY": JSON.stringify(env.GEMINI_API_KEY),
       "process.env.GEMINI_API_KEY": JSON.stringify(env.GEMINI_API_KEY),

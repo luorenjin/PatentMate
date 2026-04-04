@@ -1,12 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
-import ChatAssistant from './components/ChatAssistant';
-import NoveltySearch from './components/NoveltySearch';
-import PatentDrafter from './components/PatentDrafter';
-import Editor from './components/Editor';
-import Dashboard from './components/Dashboard';
 import { AppView, PatentData } from './types';
 import { savePatentToStorage, createNewPatentData } from './services/storageService';
+
+const ChatAssistant = lazy(() => import('./components/ChatAssistant'));
+const NoveltySearch = lazy(() => import('./components/NoveltySearch'));
+const PatentDrafter = lazy(() => import('./components/PatentDrafter'));
+const Editor = lazy(() => import('./components/Editor'));
+const Dashboard = lazy(() => import('./components/Dashboard'));
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.DASHBOARD);
@@ -34,10 +35,9 @@ const App: React.FC = () => {
 
   const handleOpenPatent = (patent: PatentData) => {
       setPatentData(patent);
-      // Determine where to go based on content or just go to Search/Summary
-      if (patent.claims || patent.detailedDescription) {
+      if (patent.status === 'ready_to_submit' || patent.status === 'editing') {
           setCurrentView(AppView.EDITOR);
-      } else if (patent.inventionContent) {
+      } else if (patent.status === 'drafting') {
           setCurrentView(AppView.DRAFTER);
       } else {
           setCurrentView(AppView.NOVELTY_SEARCH);
@@ -62,6 +62,18 @@ const App: React.FC = () => {
           // Only allow switching views if we have a patent, or if it's permitted
           // The Sidebar UI should handle disabling, but this is a safety check
           if (patentData) {
+              if (view === AppView.DRAFTER && patentData.status !== 'ready_to_submit') {
+                setPatentData(prev => prev ? ({ ...prev, status: 'drafting' }) : null);
+              }
+              if (view === AppView.EDITOR && patentData.status !== 'ready_to_submit') {
+                setPatentData(prev => prev ? ({ ...prev, status: 'editing' }) : null);
+              }
+              if (view === AppView.NOVELTY_SEARCH && patentData.status !== 'ready_to_submit') {
+                setPatentData(prev => prev ? ({
+                  ...prev,
+                  status: prev.status === 'disclosure_collecting' ? 'disclosure_collecting' : 'disclosure_review'
+                }) : null);
+              }
               setCurrentView(view);
           }
       }
@@ -96,6 +108,7 @@ const App: React.FC = () => {
         return <PatentDrafter 
                   patentData={patentData} 
                   updatePatentData={updatePatentData} 
+                  setView={setCurrentView}
                   onSave={handleSave}
                   onBack={handleBackToDashboard}
                />;
@@ -103,6 +116,7 @@ const App: React.FC = () => {
         return <Editor 
                   patentData={patentData} 
                   updatePatentData={updatePatentData} 
+                  setView={setCurrentView}
                   onSave={handleSave}
                   onBack={handleBackToDashboard}
                />;
@@ -110,6 +124,10 @@ const App: React.FC = () => {
         return null;
     }
   };
+
+  const fallback = (
+    <div className="p-8 text-sm text-slate-500">正在加载当前工作区...</div>
+  );
 
   return (
     <div className="flex h-screen w-full bg-slate-50 font-sans">
@@ -123,7 +141,9 @@ const App: React.FC = () => {
       
       <main className="flex-1 relative overflow-hidden flex flex-col">
         <div className="flex-1 overflow-y-auto p-8 scroll-smooth">
-          {renderView()}
+          <Suspense fallback={fallback}>
+            {renderView()}
+          </Suspense>
         </div>
         
         {/* Notification Toast */}
@@ -134,7 +154,9 @@ const App: React.FC = () => {
             </div>
         )}
         
-        <ChatAssistant isOpen={isChatOpen} />
+        <Suspense fallback={null}>
+          <ChatAssistant isOpen={isChatOpen} currentView={currentView} patentData={patentData} />
+        </Suspense>
       </main>
     </div>
   );

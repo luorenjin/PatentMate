@@ -10,6 +10,100 @@ interface DashboardProps {
 const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
     const [patents, setPatents] = useState<PatentData[]>([]);
     const [deleteCandidateId, setDeleteCandidateId] = useState<string | null>(null);
+    const [activeFilter, setActiveFilter] = useState<'all' | 'pending_questions' | 'strategy' | 'review' | 'ready_to_draft'>('all');
+
+    const getBlockers = (patent: PatentData) => {
+        const blockers: string[] = [];
+
+        if (patent.disclosurePendingQuestions.length > 0) {
+            blockers.push(`还有 ${patent.disclosurePendingQuestions.length} 个待追问问题`);
+        }
+        if (patent.draftReadiness < 60) {
+            blockers.push('交底完整度未达到起草门槛');
+        }
+        if (!patent.technicalProblem.trim()) {
+            blockers.push('技术问题还未明确');
+        }
+        if (patent.technicalHighlights.length < 3) {
+            blockers.push('关键技术特征不足 3 条');
+        }
+        if (!patent.claimStrategyConfirmed && patent.status !== 'disclosure_collecting') {
+            blockers.push('保护策略尚未确认');
+        }
+        if (patent.lastReviewScore > 0 && patent.lastReviewScore < 80) {
+            blockers.push(`最近审查分数仅 ${patent.lastReviewScore} 分`);
+        }
+
+        return blockers.slice(0, 2);
+    };
+
+    const matchesFilter = (patent: PatentData) => {
+        if (activeFilter === 'pending_questions') {
+            return patent.disclosurePendingQuestions.length > 0;
+        }
+        if (activeFilter === 'strategy') {
+            return !patent.claimStrategyConfirmed && patent.status !== 'disclosure_collecting';
+        }
+        if (activeFilter === 'review') {
+            return patent.lastReviewScore > 0 && patent.lastReviewScore < 80;
+        }
+        if (activeFilter === 'ready_to_draft') {
+            return patent.draftReadiness >= 60;
+        }
+        return true;
+    };
+
+    const filteredPatents = patents.filter(matchesFilter);
+
+    const getStatusMeta = (status: PatentData['status']) => {
+        switch (status) {
+            case 'disclosure_review':
+                return {
+                    label: '待确认',
+                    badgeClass: 'bg-sky-100 text-sky-700',
+                    nextAction: '继续确认交底书',
+                };
+            case 'drafting':
+                return {
+                    label: '起草中',
+                    badgeClass: 'bg-indigo-100 text-indigo-700',
+                    nextAction: '继续生成专利初稿',
+                };
+            case 'editing':
+                return {
+                    label: '待审校',
+                    badgeClass: 'bg-violet-100 text-violet-700',
+                    nextAction: '继续文稿精修',
+                };
+            case 'ready_to_submit':
+                return {
+                    label: '待提交',
+                    badgeClass: 'bg-emerald-100 text-emerald-700',
+                    nextAction: '查看正式文稿',
+                };
+            case 'disclosure_collecting':
+            default:
+                return {
+                    label: '交底采集中',
+                    badgeClass: 'bg-amber-100 text-amber-700',
+                    nextAction: '继续完成技术交底',
+                };
+        }
+    };
+
+    const stageStats = patents.reduce(
+        (acc, patent) => {
+            if (patent.status === 'ready_to_submit') {
+                acc.ready += 1;
+            } else if (patent.status === 'drafting' || patent.status === 'editing') {
+                acc.drafting += 1;
+            } else {
+                acc.disclosure += 1;
+            }
+            return acc;
+        },
+        { disclosure: 0, drafting: 0, ready: 0 },
+    );
 
     const loadPatents = () => {
         const data = getPatents();
@@ -39,16 +133,53 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
             <header className="mb-10 flex justify-between items-end">
                 <div>
                     <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">工作台</h1>
-                    <p className="text-slate-500 mt-2">管理您的专利申请草稿和已完成的项目</p>
+                    <p className="text-slate-500 mt-2">围绕技术交底采集、专利起草和正式审校管理您的项目</p>
                 </div>
                 <button 
                     onClick={onCreateNew}
                     className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-semibold shadow-lg shadow-blue-200 transition-all transform hover:-translate-y-1 flex items-center gap-2"
                 >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                    新建专利申请
+                    新建技术交底任务
                 </button>
             </header>
+
+            <section className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                    <div className="text-sm text-slate-500 mb-2">交底阶段项目</div>
+                    <div className="text-3xl font-bold text-slate-900">{stageStats.disclosure}</div>
+                    <div className="text-xs text-slate-400 mt-2">需要继续访谈、整理或确认交底书</div>
+                </div>
+                <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                    <div className="text-sm text-slate-500 mb-2">起草与审校</div>
+                    <div className="text-3xl font-bold text-slate-900">{stageStats.drafting}</div>
+                    <div className="text-xs text-slate-400 mt-2">已进入权利要求起草或正式文稿编辑</div>
+                </div>
+                <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+                    <div className="text-sm text-slate-500 mb-2">待提交文稿</div>
+                    <div className="text-3xl font-bold text-slate-900">{stageStats.ready}</div>
+                    <div className="text-xs text-slate-400 mt-2">已通过内部审校，可准备提交</div>
+                </div>
+            </section>
+
+            <section className="mb-6 flex flex-wrap gap-3">
+                {[
+                    { key: 'all', label: '全部项目' },
+                    { key: 'pending_questions', label: '待补追问' },
+                    { key: 'strategy', label: '待确认策略' },
+                    { key: 'review', label: '低审查分' },
+                    { key: 'ready_to_draft', label: '可进入起草' },
+                ].map((item) => (
+                    <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => setActiveFilter(item.key as typeof activeFilter)}
+                        className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${activeFilter === item.key ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:border-slate-300'}`}
+                    >
+                        {item.label}
+                    </button>
+                ))}
+            </section>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {/* Create New Card Placeholder */}
@@ -59,23 +190,25 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
                     <div className="w-16 h-16 rounded-full bg-slate-100 group-hover:bg-blue-100 flex items-center justify-center mb-4 transition-colors">
                         <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
                     </div>
-                    <span className="font-medium">创建新项目</span>
+                    <span className="font-medium">创建新交底项目</span>
                 </div>
 
                 {/* Patent Cards */}
-                {patents.map((patent) => (
+                {filteredPatents.map((patent) => {
+                    const statusMeta = getStatusMeta(patent.status);
+                    const interviewRounds = Math.floor(patent.disclosureInterview.length / 2) || patent.disclosureInterview.length;
+                    const reviewScore = patent.lastReviewScore ? `${patent.lastReviewScore} 分` : '未审查';
+                    const blockers = getBlockers(patent);
+
+                    return (
                     <div 
                         key={patent.id}
                         onClick={() => onOpenPatent(patent)}
                         className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm hover:shadow-xl hover:border-blue-200 transition-all cursor-pointer relative group flex flex-col"
                     >
                         <div className="flex justify-between items-start mb-4">
-                            <div className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
-                                patent.status === 'ready_to_submit' 
-                                    ? 'bg-green-100 text-green-700' 
-                                    : 'bg-amber-100 text-amber-700'
-                            }`}>
-                                {patent.status === 'ready_to_submit' ? '待提交' : '草稿中'}
+                            <div className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${statusMeta.badgeClass}`}>
+                                {statusMeta.label}
                             </div>
                             <button 
                                 onClick={(e) => handleDeleteClick(e, patent.id)}
@@ -91,18 +224,63 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
                         </h3>
                         
                         <p className="text-sm text-slate-500 mb-6 line-clamp-2 h-10">
-                            {patent.technicalField ? `领域：${patent.technicalField}` : "暂无技术领域信息..."}
+                            {patent.disclosureSummary || patent.technicalField ? (patent.disclosureSummary || `领域：${patent.technicalField}`) : "尚未开始整理技术交底内容..."}
                         </p>
+
+                        <div className="mb-5">
+                            <div className="flex justify-between text-xs text-slate-400 mb-1">
+                                <span>交底完整度</span>
+                                <span>{patent.draftReadiness}%</span>
+                            </div>
+                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                <div
+                                    className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-full"
+                                    style={{ width: `${Math.max(6, patent.draftReadiness)}%` }}
+                                />
+                            </div>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2 mb-5">
+                            <div className="px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-medium">
+                                访谈 {interviewRounds} 轮
+                            </div>
+                            <div className={`px-3 py-1 rounded-full text-xs font-medium ${patent.claimStrategyConfirmed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                                {patent.claimStrategyConfirmed ? '策略已确认' : '待确认策略'}
+                            </div>
+                            <div className={`px-3 py-1 rounded-full text-xs font-medium ${patent.lastReviewScore ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-500'}`}>
+                                审查 {reviewScore}
+                            </div>
+                        </div>
+
+                        <div className="mb-5 rounded-xl border border-slate-100 bg-slate-50 p-3">
+                            <div className="text-xs font-semibold text-slate-700 mb-2">当前卡点</div>
+                            {blockers.length > 0 ? (
+                                <div className="space-y-1 text-xs text-slate-500">
+                                    {blockers.map((item) => (
+                                        <div key={item}>• {item}</div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="text-xs text-emerald-600">当前没有明显卡点，可继续推进下一阶段。</div>
+                            )}
+                        </div>
 
                         <div className="mt-auto pt-4 border-t border-slate-100 flex justify-between items-center text-xs text-slate-400">
                             <span>最后编辑: {new Date(patent.lastModified).toLocaleDateString()}</span>
                             <span className="flex items-center gap-1 text-blue-600 font-medium group-hover:translate-x-1 transition-transform">
-                                继续编辑
+                                {statusMeta.nextAction}
                                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                             </span>
                         </div>
                     </div>
-                ))}
+                    );
+                })}
+
+                {filteredPatents.length === 0 && (
+                    <div className="md:col-span-2 lg:col-span-3 rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-slate-500">
+                        当前筛选条件下没有项目。
+                    </div>
+                )}
             </div>
 
             {/* Delete Confirmation Modal */}

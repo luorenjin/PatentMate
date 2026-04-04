@@ -1,5 +1,12 @@
 import { GoogleGenAI } from "@google/genai";
-import type { NoveltyReport, PatentData, ReviewResult } from "../types";
+import type {
+  ClaimStrategyPackage,
+  DisclosureInterviewTurn,
+  NoveltyReport,
+  PatentData,
+  ReviewResult,
+  TechnicalDisclosureSummary,
+} from "../types";
 
 const PROVIDER_GEMINI = "gemini";
 const PROVIDER_QWEN = "qwen";
@@ -50,6 +57,24 @@ export interface ChatSessionResponse {
 
 export interface ChatSession {
   sendMessage: (input: { message: string }) => Promise<ChatSessionResponse>;
+}
+
+interface ChatSessionOptions {
+  contextPrompt?: string;
+}
+
+interface DisclosureInterviewResult {
+  assistantReply: string;
+  summary: string;
+  technicalProblem: string;
+  existingSolutionIssues: string;
+  technicalHighlights: string[];
+  embodiments: string[];
+  advantages: string[];
+  alternativeSolutions: string[];
+  evidenceMaterials: string[];
+  pendingQuestions: string[];
+  risks: string[];
 }
 
 const useGemini = (): boolean => AI_PROVIDER !== PROVIDER_QWEN;
@@ -420,6 +445,325 @@ export const analyzePatentBasics = async (
 };
 
 /**
+ * 将工程师的原始技术口述整理为结构化技术交底书要点。
+ * @param title 发明名称。
+ * @param notes 工程师输入的原始技术说明、访谈记录或要点草稿。
+ * @returns 结构化的交底摘要对象；失败时返回空结构。
+ */
+export const summarizeTechnicalDisclosure = async (
+  title: string,
+  notes: string,
+): Promise<TechnicalDisclosureSummary> => {
+  const fallback: TechnicalDisclosureSummary = {
+    summary: "",
+    technicalHighlights: [],
+    embodiments: [],
+    advantages: [],
+    alternativeSolutions: [],
+    evidenceMaterials: [],
+    risks: [],
+  };
+
+  const prompt = `
+    你是一位资深中国专利代理师，请把下面的工程师原始说明整理成“技术交底书要点”。
+
+    发明名称：${title}
+    原始说明：${notes}
+
+    输出要求：
+    1. 返回一个纯 JSON 对象。
+    2. summary：用 150-250 字概括技术方案，不写空话。
+    3. technicalHighlights：提炼 3-6 个必须保护的关键技术特征。
+    4. embodiments：提炼 2-5 个可实施的实施方式或实施步骤。
+    5. advantages：提炼 2-5 个技术效果或业务价值。
+    6. alternativeSolutions：提炼可替代实现、变体或扩展方向；没有则返回空数组。
+    7. evidenceMaterials：提炼实验数据、对比结果、工艺参数、结构尺寸、流程图等可补充证据；没有则返回空数组。
+    8. risks：指出仍然缺失的信息，如边界条件、关键参数、与现有技术差异不够明确等。
+
+    JSON 结构如下：
+    {
+      "summary": "...",
+      "technicalHighlights": ["..."],
+      "embodiments": ["..."],
+      "advantages": ["..."],
+      "alternativeSolutions": ["..."],
+      "evidenceMaterials": ["..."],
+      "risks": ["..."]
+    }
+  `;
+
+  try {
+    const { text } = await generateText(prompt, "pro", { jsonMode: true });
+    const jsonString = extractJsonObject(text);
+    const result = JSON.parse(jsonString) as TechnicalDisclosureSummary;
+
+    return {
+      summary: typeof result.summary === "string" ? result.summary : "",
+      technicalHighlights: Array.isArray(result.technicalHighlights)
+        ? result.technicalHighlights.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : [],
+      embodiments: Array.isArray(result.embodiments)
+        ? result.embodiments.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : [],
+      advantages: Array.isArray(result.advantages)
+        ? result.advantages.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : [],
+      alternativeSolutions: Array.isArray(result.alternativeSolutions)
+        ? result.alternativeSolutions.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : [],
+      evidenceMaterials: Array.isArray(result.evidenceMaterials)
+        ? result.evidenceMaterials.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : [],
+      risks: Array.isArray(result.risks)
+        ? result.risks.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : [],
+    };
+  } catch (error) {
+    console.error("summarizeTechnicalDisclosure failed:", error);
+    return fallback;
+  }
+};
+
+/**
+ * 基于当前交底上下文执行一轮 AI 访谈，返回追问回复和增量整理结果。
+ * @param patentData 当前技术交底任务的结构化上下文。
+ * @param userMessage 本轮用户输入的技术说明。
+ * @returns 访谈回复、更新后的交底摘要和待追问问题；失败时返回兜底结果。
+ */
+export const runDisclosureInterviewTurn = async (
+  patentData: PatentData,
+  userMessage: string,
+): Promise<DisclosureInterviewResult> => {
+  const fallback: DisclosureInterviewResult = {
+    assistantReply:
+      "我已记录这部分信息。请继续补充现有方案缺陷、关键技术特征、实施方式或效果证据。",
+    summary: patentData.disclosureSummary,
+    technicalProblem: patentData.technicalProblem,
+    existingSolutionIssues: patentData.existingSolutionIssues,
+    technicalHighlights: patentData.technicalHighlights,
+    embodiments: patentData.embodiments,
+    advantages: patentData.advantages,
+    alternativeSolutions: patentData.alternativeSolutions,
+    evidenceMaterials: patentData.evidenceMaterials,
+    pendingQuestions: patentData.disclosurePendingQuestions,
+    risks: patentData.strategyRisks,
+  };
+
+  const historyText = patentData.disclosureInterview
+    .slice(-8)
+    .map((item) => `${item.role === "model" ? "AI" : "工程师"}: ${item.text}`)
+    .join("\n");
+
+  const prompt = `
+    你是一位正在访谈工程师的中国专利代理师。你的目标不是直接写专利，而是把技术交底信息问全、问透、问具体。
+
+    当前项目：${patentData.title}
+    已有交底摘要：${patentData.disclosureSummary}
+    已识别技术问题：${patentData.technicalProblem}
+    已识别现有方案缺陷：${patentData.existingSolutionIssues}
+    已识别关键特征：${patentData.technicalHighlights.join("；")}
+    已识别实施方式：${patentData.embodiments.join("；")}
+    已识别技术效果：${patentData.advantages.join("；")}
+    已识别替代方案：${patentData.alternativeSolutions.join("；")}
+    已识别证据材料：${patentData.evidenceMaterials.join("；")}
+    最近对话：
+    ${historyText}
+
+    本轮工程师新增说明：${userMessage}
+
+    任务：
+    1. 用 2-4 句话回复工程师，确认你理解了哪些信息，并只追问最关键的缺口。
+    2. 更新结构化交底结果，不丢失原有信息。
+    3. pendingQuestions 最多给出 3 个下一轮最值得问的问题，必须具体，不要泛泛而谈。
+    4. risks 列出仍然影响保护策略质量的信息缺口。
+
+    请返回 JSON：
+    {
+      "assistantReply": "...",
+      "summary": "...",
+      "technicalProblem": "...",
+      "existingSolutionIssues": "...",
+      "technicalHighlights": ["..."],
+      "embodiments": ["..."],
+      "advantages": ["..."],
+      "alternativeSolutions": ["..."],
+      "evidenceMaterials": ["..."],
+      "pendingQuestions": ["..."],
+      "risks": ["..."]
+    }
+  `;
+
+  try {
+    const { text } = await generateText(prompt, "pro", { jsonMode: true });
+    const jsonString = extractJsonObject(text);
+    const result = JSON.parse(jsonString) as DisclosureInterviewResult;
+
+    return {
+      assistantReply:
+        typeof result.assistantReply === "string"
+          ? result.assistantReply
+          : fallback.assistantReply,
+      summary:
+        typeof result.summary === "string" ? result.summary : fallback.summary,
+      technicalProblem:
+        typeof result.technicalProblem === "string"
+          ? result.technicalProblem
+          : fallback.technicalProblem,
+      existingSolutionIssues:
+        typeof result.existingSolutionIssues === "string"
+          ? result.existingSolutionIssues
+          : fallback.existingSolutionIssues,
+      technicalHighlights: Array.isArray(result.technicalHighlights)
+        ? result.technicalHighlights.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : fallback.technicalHighlights,
+      embodiments: Array.isArray(result.embodiments)
+        ? result.embodiments.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : fallback.embodiments,
+      advantages: Array.isArray(result.advantages)
+        ? result.advantages.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : fallback.advantages,
+      alternativeSolutions: Array.isArray(result.alternativeSolutions)
+        ? result.alternativeSolutions.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : fallback.alternativeSolutions,
+      evidenceMaterials: Array.isArray(result.evidenceMaterials)
+        ? result.evidenceMaterials.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : fallback.evidenceMaterials,
+      pendingQuestions: Array.isArray(result.pendingQuestions)
+        ? result.pendingQuestions
+            .filter((item): item is string => typeof item === "string")
+            .slice(0, 3)
+        : fallback.pendingQuestions,
+      risks: Array.isArray(result.risks)
+        ? result.risks.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : fallback.risks,
+    };
+  } catch (error) {
+    console.error("runDisclosureInterviewTurn failed:", error);
+    return fallback;
+  }
+};
+
+/**
+ * 根据当前技术交底和风险信息生成显式的权利要求策略包。
+ * @param patentData 当前技术交底任务数据。
+ * @returns 含独立权利要求骨架、从属层级建议和风险提示的策略包；失败时返回空结构。
+ */
+export const generateClaimStrategyPackage = async (
+  patentData: PatentData,
+): Promise<ClaimStrategyPackage> => {
+  const fallback: ClaimStrategyPackage = {
+    claimStrategy: patentData.claimStrategy,
+    independentClaimSkeleton: patentData.independentClaimSkeleton,
+    dependentClaimOptions: patentData.dependentClaimOptions,
+    strategyRisks: patentData.strategyRisks,
+  };
+
+  const prompt = `
+    你是一位资深中国专利代理师。请基于下列技术交底信息生成“保护策略包”，重点是帮助后续起草权利要求，不要写成完整申请书。
+
+    发明名称：${patentData.title}
+    技术问题：${patentData.technicalProblem}
+    现有方案缺陷：${patentData.existingSolutionIssues}
+    交底摘要：${patentData.disclosureSummary}
+    关键技术特征：${patentData.technicalHighlights.join("；")}
+    实施方式：${patentData.embodiments.join("；")}
+    技术效果：${patentData.advantages.join("；")}
+    替代方案：${patentData.alternativeSolutions.join("；")}
+    证据材料：${patentData.evidenceMaterials.join("；")}
+    当前风险：${patentData.strategyRisks.join("；")}
+
+    输出要求：
+    1. claimStrategy：用中文概括保护思路，分点说明独立权利要求、从属权利要求和规避风险处理。
+    2. independentClaimSkeleton：输出一版独立权利要求骨架，用“包括……其特征在于……”这种骨架方式，但不要过度展开到正式稿。
+    3. dependentClaimOptions：输出 3-6 条从属层级建议，每条一句。
+    4. strategyRisks：列出当前保护策略仍然存在的风险或信息缺口。
+
+    返回 JSON：
+    {
+      "claimStrategy": "...",
+      "independentClaimSkeleton": "...",
+      "dependentClaimOptions": ["..."],
+      "strategyRisks": ["..."]
+    }
+  `;
+
+  try {
+    const { text } = await generateText(prompt, "pro", { jsonMode: true });
+    const jsonString = extractJsonObject(text);
+    const result = JSON.parse(jsonString) as ClaimStrategyPackage;
+
+    return {
+      claimStrategy:
+        typeof result.claimStrategy === "string"
+          ? result.claimStrategy
+          : fallback.claimStrategy,
+      independentClaimSkeleton:
+        typeof result.independentClaimSkeleton === "string"
+          ? result.independentClaimSkeleton
+          : fallback.independentClaimSkeleton,
+      dependentClaimOptions: Array.isArray(result.dependentClaimOptions)
+        ? result.dependentClaimOptions.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : fallback.dependentClaimOptions,
+      strategyRisks: Array.isArray(result.strategyRisks)
+        ? result.strategyRisks.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : fallback.strategyRisks,
+    };
+  } catch (error) {
+    console.error("generateClaimStrategyPackage failed:", error);
+    return fallback;
+  }
+};
+
+/**
+ * 在审查回写后基于最新交底与风险重新生成保护策略包。
+ * @param patentData 已合并审查意见的专利任务数据。
+ * @returns 更新后的权利要求策略包；失败时返回当前已有策略内容。
+ */
+export const regenerateClaimStrategyFromReview = async (
+  patentData: PatentData,
+): Promise<ClaimStrategyPackage> => {
+  try {
+    return await generateClaimStrategyPackage(patentData);
+  } catch (error) {
+    console.error("regenerateClaimStrategyFromReview failed:", error);
+    return {
+      claimStrategy: patentData.claimStrategy,
+      independentClaimSkeleton: patentData.independentClaimSkeleton,
+      dependentClaimOptions: patentData.dependentClaimOptions,
+      strategyRisks: patentData.strategyRisks,
+    };
+  }
+};
+
+/**
  * Generates a specific section of the patent using gemini-3-pro-preview.
  * This fulfills Requirement 1: "Write patent application based on name/input".
  */
@@ -432,6 +776,15 @@ export const generatePatentSection = async (
     你是一位专业的中国专利代理师。请根据以下提供的发明信息，撰写专利申请书的【${sectionName}】部分。
     
     发明名称：${patentData.title}
+    技术问题：${patentData.technicalProblem}
+    现有方案缺陷：${patentData.existingSolutionIssues}
+    交底摘要：${patentData.disclosureSummary}
+    关键技术特征：${patentData.technicalHighlights.join("；")}
+    典型实施方式：${patentData.embodiments.join("；")}
+    技术效果：${patentData.advantages.join("；")}
+    可替代方案：${patentData.alternativeSolutions.join("；")}
+    证据材料：${patentData.evidenceMaterials.join("；")}
+    权利要求策略：${patentData.claimStrategy}
     技术领域：${patentData.technicalField}
     背景技术概要（现有缺陷）：${patentData.backgroundArt}
     发明内容（核心方案）：${patentData.inventionContent}
@@ -550,9 +903,13 @@ export const refineText = async (
  * Chat with AI Assistant.
  * Fulfills feature: "AI powered chatbot".
  */
-export const createChatSession = (): ChatSession => {
-  const systemInstruction =
-    "你是一位精通中国专利法（CNIPA）的AI助手。你可以回答用户关于专利申请流程、法律法规的问题，或者帮助用户分析他们当前的专利草稿。回答要简练、专业。";
+export const createChatSession = (
+  options?: ChatSessionOptions,
+): ChatSession => {
+  const systemInstruction = `
+    你是一位精通中国专利法（CNIPA）的AI助手。你可以回答用户关于专利申请流程、法律法规的问题，或者帮助用户分析他们当前的专利草稿。回答要简练、专业。
+    ${options?.contextPrompt ? `当前业务上下文如下：\n${options.contextPrompt}` : ""}
+  `;
 
   if (useGemini() && geminiClient) {
     const geminiChat = geminiClient.chats.create({

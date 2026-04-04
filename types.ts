@@ -1,12 +1,39 @@
-
 export enum AppView {
-  DASHBOARD = 'DASHBOARD',
-  NOVELTY_SEARCH = 'NOVELTY_SEARCH',
-  DRAFTER = 'DRAFTER',
-  EDITOR = 'EDITOR'
+  DASHBOARD = "DASHBOARD",
+  NOVELTY_SEARCH = "NOVELTY_SEARCH",
+  DRAFTER = "DRAFTER",
+  EDITOR = "EDITOR",
 }
 
-export type PatentStatus = 'draft' | 'ready_to_submit';
+export type PatentStatus =
+  | "disclosure_collecting"
+  | "disclosure_review"
+  | "drafting"
+  | "editing"
+  | "ready_to_submit";
+
+export interface TechnicalDisclosureSummary {
+  summary: string;
+  technicalHighlights: string[];
+  embodiments: string[];
+  advantages: string[];
+  alternativeSolutions: string[];
+  evidenceMaterials: string[];
+  risks: string[];
+}
+
+export interface ClaimStrategyPackage {
+  claimStrategy: string;
+  independentClaimSkeleton: string;
+  dependentClaimOptions: string[];
+  strategyRisks: string[];
+}
+
+export interface DisclosureInterviewTurn {
+  role: "user" | "model";
+  text: string;
+  timestamp: number;
+}
 
 export interface PatentData {
   id: string;
@@ -14,7 +41,28 @@ export interface PatentData {
   status: PatentStatus;
   lastModified: number;
   createdAt: number;
-  
+
+  // Disclosure stage fields
+  disclosureNotes: string;
+  disclosureSummary: string;
+  disclosureInterview: DisclosureInterviewTurn[];
+  disclosurePendingQuestions: string[];
+  technicalProblem: string;
+  existingSolutionIssues: string;
+  technicalHighlights: string[];
+  embodiments: string[];
+  advantages: string[];
+  alternativeSolutions: string[];
+  evidenceMaterials: string[];
+  claimStrategy: string;
+  independentClaimSkeleton: string;
+  dependentClaimOptions: string[];
+  claimStrategyConfirmed: boolean;
+  strategyRisks: string[];
+  draftReadiness: number;
+  reviewSummary: string;
+  lastReviewScore: number;
+
   // Content fields
   technicalField: string;
   backgroundArt: string;
@@ -33,7 +81,7 @@ export interface NoveltyReport {
 }
 
 export interface ChatMessage {
-  role: 'user' | 'model';
+  role: "user" | "model";
   text: string;
   timestamp: number;
 }
@@ -52,8 +100,8 @@ export interface ReviewIssue {
 }
 
 export interface ReviewResult {
-    score: number;
-    feedback: string;
-    passed: boolean;
-    detailedIssues?: ReviewIssue[];
+  score: number;
+  feedback: string;
+  passed: boolean;
+  detailedIssues?: ReviewIssue[];
 }

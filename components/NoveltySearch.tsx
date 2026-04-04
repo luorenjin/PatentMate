@@ -1,8 +1,16 @@
 
-import React, { useState } from 'react';
-import { performNoveltySearch, generateInventionIdea, analyzePatentBasics, optimizeInventionContent } from '../services/geminiService';
-import { NoveltyReport, PatentData, AppView } from '../types';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  analyzePatentBasics,
+  generateClaimStrategyPackage,
+  generateInventionIdea,
+  optimizeInventionContent,
+  performNoveltySearch,
+  runDisclosureInterviewTurn,
+  summarizeTechnicalDisclosure,
+} from '../services/geminiService';
 import { RichTextEditor } from './RichTextEditor';
+import { AppView, DisclosureInterviewTurn, NoveltyReport, PatentData } from '../types';
 import { renderMarkdown } from '../services/markdownService';
 
 interface NoveltySearchProps {
@@ -13,334 +21,1061 @@ interface NoveltySearchProps {
   onBack: () => void;
 }
 
-// Helper to strip HTML tags to get plain text for AI inputs
 const stripHtml = (html: string) => {
-    const tmp = document.createElement('DIV');
-    tmp.innerHTML = html;
-    return tmp.textContent || tmp.innerText || '';
+  const tmp = document.createElement('DIV');
+  tmp.innerHTML = html;
+  return tmp.textContent || tmp.innerText || '';
 };
+
+const splitLines = (value: string): string[] =>
+  value
+    .split('\n')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const joinLines = (items: string[]): string => items.join('\n');
+
+const appendMarkdownBullet = (current: string, text: string) =>
+  [current.trim(), `- ${text}`].filter(Boolean).join('\n');
+
+const normalizeMarkdownLine = (line: string) =>
+  line
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/^[-*+]\s+/, '')
+    .replace(/^\d+\.\s+/, '')
+    .replace(/[*_`>#]/g, '')
+    .trim();
+
+const buildLocalDisclosureDraft = (markdown: string) => {
+  const lines = markdown
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const sections: Record<string, string[]> = {
+    problem: [],
+    issues: [],
+    highlights: [],
+    embodiments: [],
+    advantages: [],
+    alternatives: [],
+    evidence: [],
+    summary: [],
+  };
+
+  let currentSection: keyof typeof sections = 'summary';
+
+  lines.forEach((line) => {
+    const normalized = normalizeMarkdownLine(line);
+    if (!normalized) {
+      return;
+    }
+
+    if (/技术问题|待解决问题|问题定义/.test(normalized)) {
+      currentSection = 'problem';
+      return;
+    }
+    if (/现有方案缺陷|现有缺陷|背景问题|痛点/.test(normalized)) {
+      currentSection = 'issues';
+      return;
+    }
+    if (/关键技术特征|技术特征|核心方案|核心模块/.test(normalized)) {
+      currentSection = 'highlights';
+      return;
+    }
+    if (/实施方式|实施例|实现步骤|流程步骤/.test(normalized)) {
+      currentSection = 'embodiments';
+      return;
+    }
+    if (/技术效果|效果|收益|优势/.test(normalized)) {
+      currentSection = 'advantages';
+      return;
+    }
+    if (/替代方案|扩展方案|变形方案/.test(normalized)) {
+      currentSection = 'alternatives';
+      return;
+    }
+    if (/证据|实验|测试|参数|数据/.test(normalized)) {
+      currentSection = 'evidence';
+      return;
+    }
+
+    sections[currentSection].push(normalized);
+  });
+
+  const summaryLines = sections.summary.slice(0, 4);
+
+  return {
+    technicalProblem: sections.problem[0] || '',
+    existingSolutionIssues: sections.issues[0] || '',
+    technicalHighlights: sections.highlights.slice(0, 8),
+    embodiments: sections.embodiments.slice(0, 8),
+    advantages: sections.advantages.slice(0, 8),
+    alternativeSolutions: sections.alternatives.slice(0, 8),
+    evidenceMaterials: sections.evidence.slice(0, 8),
+    disclosureSummary: summaryLines.join('；'),
+  };
+};
+
+const disclosureTemplates = [
+  {
+    id: 'software',
+    name: '软件/算法方案',
+    hint: '适合识别、推荐、调度、控制、预测类发明。',
+    notes: [
+      '现有系统在什么场景下效果不稳定，具体表现为哪些误差、时延或资源浪费？',
+      '你的核心改进模块是什么，输入输出分别是什么？',
+      '关键算法流程如何拆成 3 到 5 个步骤，每一步解决什么问题？',
+      '相比现有方法，精度、召回率、时延、算力或稳定性提升了多少？',
+      '是否有可替代模型、参数配置或部署方式？',
+    ].join('\n'),
+    prompt: '我们在现有算法/软件方案上做了新的流程和模块设计，重点想保护核心处理流程、关键判断逻辑以及效果提升。',
+  },
+  {
+    id: 'mechanical',
+    name: '机械/结构方案',
+    hint: '适合装置、结构件、工装夹具、传动机构类发明。',
+    notes: [
+      '现有结构的卡点是什么，例如精度不足、磨损快、装配复杂或维护成本高？',
+      '新的结构由哪些关键部件构成，彼此连接关系是什么？',
+      '运动路径、受力路径或配合方式与现有方案有何不同？',
+      '实施时的关键尺寸、材料、角度或安装顺序是什么？',
+      '带来了哪些效果，例如稳定性提升、加工效率提升或故障率下降？',
+    ].join('\n'),
+    prompt: '我们在机械结构和部件配合关系上有明确改进，重点想保护关键构件、连接关系和动作过程。',
+  },
+  {
+    id: 'process',
+    name: '工艺/流程方案',
+    hint: '适合制造流程、检测流程、处理工艺、控制方法类发明。',
+    notes: [
+      '现有工艺或流程在哪个环节最容易造成成本、良率或质量问题？',
+      '新方案的流程顺序是什么，每一步输入、处理动作和输出是什么？',
+      '哪些工艺参数、阈值或条件控制是关键？',
+      '不同步骤之间如何联动，如何避免现有方案的问题？',
+      '最终在良率、能耗、稳定性或周期上实现了什么改善？',
+    ].join('\n'),
+    prompt: '我们在处理流程、步骤顺序和关键工艺参数上有创新，重点想保护关键步骤组合和参数控制逻辑。',
+  },
+];
 
 const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentData, setView, onSave, onBack }) => {
   const [isSearching, setIsSearching] = useState(false);
   const [isGeneratingIdea, setIsGeneratingIdea] = useState(false);
+  const [isStructuring, setIsStructuring] = useState(false);
   const [isPreparingDraft, setIsPreparingDraft] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [optimizedContent, setOptimizedContent] = useState<string | null>(null);
   const [report, setReport] = useState<NoveltyReport | null>(null);
+  const [riskTips, setRiskTips] = useState<string[]>([]);
+  const [interviewInput, setInterviewInput] = useState('');
+  const [isInterviewing, setIsInterviewing] = useState(false);
+  const [localParseTips, setLocalParseTips] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [focusTarget, setFocusTarget] = useState<{ id: string; tick: number } | null>(null);
 
-  const handleSearch = async () => {
-    if (!patentData.title || !patentData.inventionContent) {
-      setError("请输入专利名称和核心发明内容以进行检索。");
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const disclosureNotesRef = useRef<HTMLDivElement>(null);
+  const technicalProblemRef = useRef<HTMLDivElement>(null);
+  const existingSolutionIssuesRef = useRef<HTMLDivElement>(null);
+  const disclosureSummaryRef = useRef<HTMLDivElement>(null);
+  const technicalHighlightsRef = useRef<HTMLDivElement>(null);
+  const embodimentsRef = useRef<HTMLDivElement>(null);
+  const advantagesRef = useRef<HTMLDivElement>(null);
+  const evidenceMaterialsRef = useRef<HTMLDivElement>(null);
+
+  const claimStrategyDraft = patentData.claimStrategy;
+
+  const fieldRefs = {
+    title: titleInputRef,
+    disclosureNotes: disclosureNotesRef,
+    technicalProblem: technicalProblemRef,
+    existingSolutionIssues: existingSolutionIssuesRef,
+    disclosureSummary: disclosureSummaryRef,
+    technicalHighlights: technicalHighlightsRef,
+    embodiments: embodimentsRef,
+    advantages: advantagesRef,
+    evidenceMaterials: evidenceMaterialsRef,
+  } as const;
+
+  const readinessItems = useMemo(
+    () => [
+      { label: '发明名称已定义', completed: Boolean(patentData.title?.trim()), weight: 10, target: 'title' },
+      { label: '已记录原始技术口述', completed: Boolean(patentData.disclosureNotes?.trim()), weight: 20, target: 'disclosureNotes' },
+      { label: '技术问题已明确', completed: Boolean(patentData.technicalProblem?.trim()), weight: 15, target: 'technicalProblem' },
+      { label: '现有方案缺陷已说明', completed: Boolean(patentData.existingSolutionIssues?.trim()), weight: 15, target: 'existingSolutionIssues' },
+      { label: '关键技术特征不少于 3 条', completed: patentData.technicalHighlights.length >= 3, weight: 15, target: 'technicalHighlights' },
+      { label: '实施方式已有初稿', completed: patentData.embodiments.length >= 1, weight: 10, target: 'embodiments' },
+      { label: '技术效果已量化或可描述', completed: patentData.advantages.length >= 1, weight: 10, target: 'advantages' },
+      { label: '证据或实验材料已补充', completed: patentData.evidenceMaterials.length >= 1, weight: 5, target: 'evidenceMaterials' },
+    ],
+    [patentData],
+  );
+
+  const draftReadiness = useMemo(
+    () => readinessItems.reduce((sum, item) => (item.completed ? sum + item.weight : sum), 0),
+    [readinessItems],
+  );
+
+  useEffect(() => {
+    if (patentData.draftReadiness !== draftReadiness) {
+      updatePatentData('draftReadiness', draftReadiness);
+    }
+  }, [draftReadiness, patentData.draftReadiness, updatePatentData]);
+
+  const focusField = (target: keyof typeof fieldRefs) => {
+    const targetRef = fieldRefs[target];
+    const current = targetRef.current;
+
+    current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    if (target === 'title') {
+      requestAnimationFrame(() => {
+        titleInputRef.current?.focus();
+      });
       return;
     }
-    setError(null);
-    setIsSearching(true);
-    setReport(null);
-    setOptimizedContent(null);
 
-    // Strip HTML for the search prompt to ensure clean context
-    const plainDescription = stripHtml(patentData.inventionContent);
+    setFocusTarget({ id: target, tick: Date.now() });
+  };
+
+  const disclosurePayload = useMemo(() => {
+    const sections = [
+      `发明名称：${patentData.title}`,
+      `原始技术口述：${patentData.disclosureNotes}`,
+      `要解决的技术问题：${patentData.technicalProblem}`,
+      `现有方案缺陷：${patentData.existingSolutionIssues}`,
+      `结构化交底摘要：${patentData.disclosureSummary}`,
+      `关键技术特征：${patentData.technicalHighlights.join('；')}`,
+      `实施方式：${patentData.embodiments.join('；')}`,
+      `技术效果：${patentData.advantages.join('；')}`,
+      `替代方案：${patentData.alternativeSolutions.join('；')}`,
+      `证据材料：${patentData.evidenceMaterials.join('；')}`,
+    ];
+
+    return sections.filter((item) => !item.endsWith('：')).join('\n');
+  }, [patentData]);
+
+  const updateListField = (
+    key:
+      | 'technicalHighlights'
+      | 'embodiments'
+      | 'advantages'
+      | 'alternativeSolutions'
+      | 'evidenceMaterials',
+    value: string,
+  ) => {
+    updatePatentData(key, splitLines(value).map((item) => normalizeMarkdownLine(item)).filter(Boolean));
+    updatePatentData('claimStrategyConfirmed', false);
+  };
+
+  const applyStrategyPackage = async (nextData?: PatentData) => {
+    const strategyPackage = await generateClaimStrategyPackage(nextData || patentData);
+    updatePatentData('claimStrategy', strategyPackage.claimStrategy);
+    updatePatentData('independentClaimSkeleton', strategyPackage.independentClaimSkeleton);
+    updatePatentData('dependentClaimOptions', strategyPackage.dependentClaimOptions);
+    updatePatentData('strategyRisks', strategyPackage.strategyRisks);
+    updatePatentData('claimStrategyConfirmed', false);
+  };
+
+  const appendInterviewTurn = (turn: DisclosureInterviewTurn) => {
+    updatePatentData('disclosureInterview', [...patentData.disclosureInterview, turn]);
+  };
+
+  const handleInterviewSend = async () => {
+    if (!interviewInput.trim()) return;
+
+    const userText = interviewInput.trim();
+    const userTurn: DisclosureInterviewTurn = {
+      role: 'user',
+      text: userText,
+      timestamp: Date.now(),
+    };
+
+    appendInterviewTurn(userTurn);
+    updatePatentData(
+      'disclosureNotes',
+      [patentData.disclosureNotes, `工程师：${userText}`].filter(Boolean).join('\n\n'),
+    );
+    setInterviewInput('');
+    setIsInterviewing(true);
+    setError(null);
 
     try {
-      const result = await performNoveltySearch(patentData.title, plainDescription);
-      setReport(result);
+      const nextPatentData = {
+        ...patentData,
+        disclosureInterview: [...patentData.disclosureInterview, userTurn],
+      };
+      const result = await runDisclosureInterviewTurn(nextPatentData, userText);
+      const assistantTurn: DisclosureInterviewTurn = {
+        role: 'model',
+        text: result.assistantReply,
+        timestamp: Date.now(),
+      };
+
+      updatePatentData('disclosureInterview', [...nextPatentData.disclosureInterview, assistantTurn]);
+      updatePatentData(
+        'disclosureNotes',
+        [
+          [patentData.disclosureNotes, `工程师：${userText}`].filter(Boolean).join('\n\n'),
+          `AI：${result.assistantReply}`,
+        ].join('\n\n'),
+      );
+      updatePatentData('disclosureSummary', result.summary);
+      updatePatentData('technicalProblem', result.technicalProblem);
+      updatePatentData('existingSolutionIssues', result.existingSolutionIssues);
+      updatePatentData('technicalHighlights', result.technicalHighlights);
+      updatePatentData('embodiments', result.embodiments);
+      updatePatentData('advantages', result.advantages);
+      updatePatentData('alternativeSolutions', result.alternativeSolutions);
+      updatePatentData('evidenceMaterials', result.evidenceMaterials);
+      updatePatentData('disclosurePendingQuestions', result.pendingQuestions);
+      updatePatentData('strategyRisks', result.risks);
+      updatePatentData('status', 'disclosure_review');
+      setRiskTips(result.risks);
+
+      const mergedPatentData = {
+        ...nextPatentData,
+        disclosureSummary: result.summary,
+        technicalProblem: result.technicalProblem,
+        existingSolutionIssues: result.existingSolutionIssues,
+        technicalHighlights: result.technicalHighlights,
+        embodiments: result.embodiments,
+        advantages: result.advantages,
+        alternativeSolutions: result.alternativeSolutions,
+        evidenceMaterials: result.evidenceMaterials,
+        strategyRisks: result.risks,
+        disclosurePendingQuestions: result.pendingQuestions,
+      };
+
+      await applyStrategyPackage(mergedPatentData);
     } catch (err) {
-      setError("检索过程中发生错误，请检查网络或API Key设置。");
+      setError('交底访谈失败，请重试。');
     } finally {
-      setIsSearching(false);
+      setIsInterviewing(false);
     }
   };
 
-  const handleAutoFill = async () => {
-    if (!patentData.title) {
-      setError("请先输入专利名称，AI 才能为您构思方案。");
+  const handleGenerateInterviewDraft = async () => {
+    if (!patentData.title.trim()) {
+      setError('请先输入发明名称，系统再为你生成访谈草稿。');
       return;
     }
+
     setError(null);
     setIsGeneratingIdea(true);
+
     try {
       const idea = await generateInventionIdea(patentData.title);
-      // Convert Markdown to HTML for the RichTextEditor
-      const htmlIdea = renderMarkdown(idea);
-      updatePatentData('inventionContent', htmlIdea);
+      updatePatentData('disclosureNotes', idea);
+
+      const structured = await summarizeTechnicalDisclosure(patentData.title, idea);
+      updatePatentData('disclosureSummary', structured.summary);
+      updatePatentData('technicalHighlights', structured.technicalHighlights);
+      updatePatentData('embodiments', structured.embodiments);
+      updatePatentData('advantages', structured.advantages);
+      updatePatentData('alternativeSolutions', structured.alternativeSolutions);
+      updatePatentData('evidenceMaterials', structured.evidenceMaterials);
+      updatePatentData('strategyRisks', structured.risks);
+      updatePatentData('status', 'disclosure_review');
+      setRiskTips(structured.risks);
+      await applyStrategyPackage({
+        ...patentData,
+        disclosureNotes: idea,
+        disclosureSummary: structured.summary,
+        technicalHighlights: structured.technicalHighlights,
+        embodiments: structured.embodiments,
+        advantages: structured.advantages,
+        alternativeSolutions: structured.alternativeSolutions,
+        evidenceMaterials: structured.evidenceMaterials,
+        strategyRisks: structured.risks,
+      });
     } catch (err) {
-      setError("AI 构思失败，请重试。");
+      setError('AI 生成交底草稿失败，请重试。');
     } finally {
       setIsGeneratingIdea(false);
     }
   };
 
-  const handleOptimize = async () => {
-      if (!report) return;
-      setIsOptimizing(true);
-      setError(null);
-      
-      const plainContent = stripHtml(patentData.inventionContent);
+  const handleApplyTemplate = (templateId: string) => {
+    const template = disclosureTemplates.find((item) => item.id === templateId);
+    if (!template) {
+      return;
+    }
 
-      try {
-          const optimizedContentRaw = await optimizeInventionContent(plainContent, report.analysis);
-          // Convert Markdown to HTML before storing in local state
-          const htmlOptimized = renderMarkdown(optimizedContentRaw);
-          setOptimizedContent(htmlOptimized);
-      } catch (err) {
-          setError("优化失败，请重试。");
-      } finally {
-          setIsOptimizing(false);
-      }
+    updatePatentData(
+      'disclosureNotes',
+      [patentData.disclosureNotes.trim(), template.notes].filter(Boolean).join('\n\n'),
+    );
+    updatePatentData(
+      'disclosurePendingQuestions',
+      splitLines(template.notes),
+    );
+    updatePatentData('claimStrategyConfirmed', false);
+    setInterviewInput(template.prompt);
+    setError(null);
+  };
+
+  const handleStructureDisclosure = async () => {
+    if (!patentData.title.trim() || !patentData.disclosureNotes.trim()) {
+      setError('请先填写发明名称和原始技术口述，再让 AI 帮你整理。');
+      return;
+    }
+
+    setError(null);
+    setIsStructuring(true);
+
+    try {
+      const structured = await summarizeTechnicalDisclosure(patentData.title, patentData.disclosureNotes);
+      updatePatentData('disclosureSummary', structured.summary);
+      updatePatentData('technicalHighlights', structured.technicalHighlights);
+      updatePatentData('embodiments', structured.embodiments);
+      updatePatentData('advantages', structured.advantages);
+      updatePatentData('alternativeSolutions', structured.alternativeSolutions);
+      updatePatentData('evidenceMaterials', structured.evidenceMaterials);
+      updatePatentData('strategyRisks', structured.risks);
+      updatePatentData('status', 'disclosure_review');
+      setRiskTips(structured.risks);
+      await applyStrategyPackage({
+        ...patentData,
+        disclosureSummary: structured.summary,
+        technicalHighlights: structured.technicalHighlights,
+        embodiments: structured.embodiments,
+        advantages: structured.advantages,
+        alternativeSolutions: structured.alternativeSolutions,
+        evidenceMaterials: structured.evidenceMaterials,
+        strategyRisks: structured.risks,
+      });
+    } catch (err) {
+      setError('AI 整理交底书失败，请重试。');
+    } finally {
+      setIsStructuring(false);
+    }
+  };
+
+  const handleApplyPendingQuestion = (question: string) => {
+    setInterviewInput((current) => appendMarkdownBullet(current, question));
+  };
+
+  const handleExtractMarkdown = () => {
+    if (!patentData.disclosureNotes.trim()) {
+      setError('请先在原始技术口述中输入 Markdown 内容，再执行本地提取。');
+      return;
+    }
+
+    const extracted = buildLocalDisclosureDraft(patentData.disclosureNotes);
+    updatePatentData('technicalProblem', extracted.technicalProblem || patentData.technicalProblem);
+    updatePatentData('existingSolutionIssues', extracted.existingSolutionIssues || patentData.existingSolutionIssues);
+    updatePatentData(
+      'technicalHighlights',
+      extracted.technicalHighlights.length > 0 ? extracted.technicalHighlights : patentData.technicalHighlights,
+    );
+    updatePatentData(
+      'embodiments',
+      extracted.embodiments.length > 0 ? extracted.embodiments : patentData.embodiments,
+    );
+    updatePatentData(
+      'advantages',
+      extracted.advantages.length > 0 ? extracted.advantages : patentData.advantages,
+    );
+    updatePatentData(
+      'alternativeSolutions',
+      extracted.alternativeSolutions.length > 0 ? extracted.alternativeSolutions : patentData.alternativeSolutions,
+    );
+    updatePatentData(
+      'evidenceMaterials',
+      extracted.evidenceMaterials.length > 0 ? extracted.evidenceMaterials : patentData.evidenceMaterials,
+    );
+    if (extracted.disclosureSummary) {
+      updatePatentData('disclosureSummary', extracted.disclosureSummary);
+    }
+    updatePatentData('claimStrategyConfirmed', false);
+    setLocalParseTips([
+      extracted.technicalProblem ? '已识别技术问题' : '未识别出明确的技术问题标题，可手动补充',
+      extracted.technicalHighlights.length > 0 ? `提取出 ${extracted.technicalHighlights.length} 条关键技术特征` : '未提取到关键技术特征列表',
+      extracted.embodiments.length > 0 ? `提取出 ${extracted.embodiments.length} 条实施方式` : '未提取到实施方式列表',
+    ]);
+    setError(null);
+  };
+
+  const handleSearch = async () => {
+    if (draftReadiness < 40) {
+      setError('当前交底信息过少，建议至少补齐技术问题、现有缺陷和关键技术特征后再做挑战式检索。');
+      return;
+    }
+
+    setError(null);
+    setIsSearching(true);
+    setReport(null);
+    setOptimizedContent(null);
+
+    try {
+      const result = await performNoveltySearch(patentData.title, disclosurePayload);
+      setReport(result);
+      updatePatentData('status', 'disclosure_review');
+    } catch (err) {
+      setError('挑战式检索失败，请检查网络或 API Key 设置。');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleOptimize = async () => {
+    if (!report) return;
+
+    setIsOptimizing(true);
+    setError(null);
+
+    try {
+      const optimizedContentRaw = await optimizeInventionContent(disclosurePayload, report.analysis);
+      setOptimizedContent(renderMarkdown(optimizedContentRaw));
+    } catch (err) {
+      setError('AI 补强建议生成失败，请重试。');
+    } finally {
+      setIsOptimizing(false);
+    }
+  };
+
+  const handleAcceptOptimization = () => {
+    if (!optimizedContent) return;
+
+    const mergedSummary = [patentData.disclosureSummary, stripHtml(optimizedContent)]
+      .filter(Boolean)
+      .join('\n\n');
+
+    updatePatentData('disclosureSummary', mergedSummary);
+    updatePatentData('inventionContent', `${patentData.inventionContent}\n\n<h3>挑战式补强建议</h3>\n${optimizedContent}`.trim());
+    void applyStrategyPackage({
+      ...patentData,
+      disclosureSummary: mergedSummary,
+    });
+    setOptimizedContent(null);
   };
 
   const handleProceedToDraft = async () => {
+    if (draftReadiness < 60) {
+      setError('交底完整度不足，建议先补齐关键信息后再进入起草。');
+      return;
+    }
+
     setIsPreparingDraft(true);
-    // Use plain text for analysis prompt, or allow HTML if the service handles it.
-    // Generally stripping is safer for simple extraction prompts.
-    const plainContent = stripHtml(patentData.inventionContent);
+    setError(null);
+
+    const mergedMarkdown = [
+      `## 技术问题\n${patentData.technicalProblem || patentData.disclosureSummary || '待补充'}`,
+      `## 现有方案缺陷\n${patentData.existingSolutionIssues || patentData.backgroundArt || '待补充'}`,
+      `## 核心技术方案\n${patentData.disclosureSummary || patentData.disclosureNotes}`,
+      patentData.technicalHighlights.length > 0
+        ? `## 关键技术特征\n${patentData.technicalHighlights.map((item) => `- ${item}`).join('\n')}`
+        : '',
+      patentData.embodiments.length > 0
+        ? `## 实施方式\n${patentData.embodiments.map((item) => `- ${item}`).join('\n')}`
+        : '',
+      patentData.advantages.length > 0
+        ? `## 技术效果\n${patentData.advantages.map((item) => `- ${item}`).join('\n')}`
+        : '',
+      patentData.alternativeSolutions.length > 0
+        ? `## 可替代方案\n${patentData.alternativeSolutions.map((item) => `- ${item}`).join('\n')}`
+        : '',
+      patentData.evidenceMaterials.length > 0
+        ? `## 证据与实验材料\n${patentData.evidenceMaterials.map((item) => `- ${item}`).join('\n')}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
 
     try {
-        const basics = await analyzePatentBasics(patentData.title, plainContent);
-        updatePatentData('technicalField', basics.technicalField);
-        updatePatentData('backgroundArt', basics.backgroundArt);
-        setView(AppView.DRAFTER);
-    } catch (e) {
-        console.error(e);
-        setView(AppView.DRAFTER);
+      const basics = await analyzePatentBasics(patentData.title, disclosurePayload);
+      updatePatentData('technicalField', basics.technicalField);
+      updatePatentData('backgroundArt', patentData.existingSolutionIssues || basics.backgroundArt);
+      updatePatentData('inventionContent', renderMarkdown(mergedMarkdown));
+      updatePatentData('status', 'drafting');
+      if (!patentData.claimStrategy.trim()) {
+        await applyStrategyPackage({
+          ...patentData,
+          backgroundArt: patentData.existingSolutionIssues || basics.backgroundArt,
+          inventionContent: renderMarkdown(mergedMarkdown),
+        });
+      }
+      setView(AppView.DRAFTER);
+    } catch (err) {
+      updatePatentData('inventionContent', renderMarkdown(mergedMarkdown));
+      updatePatentData('status', 'drafting');
+      if (!patentData.claimStrategy.trim()) {
+        await applyStrategyPackage({
+          ...patentData,
+          inventionContent: renderMarkdown(mergedMarkdown),
+        });
+      }
+      setView(AppView.DRAFTER);
     } finally {
-        setIsPreparingDraft(false);
+      setIsPreparingDraft(false);
     }
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8 pb-20">
-      {/* Header Controls */}
+    <div className="max-w-7xl mx-auto space-y-8 pb-20">
       <div className="flex justify-between items-center">
-          <button 
-            onClick={onBack}
-            className="text-slate-500 hover:text-slate-800 flex items-center gap-2 font-medium"
-          >
-             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
-             返回工作台
-          </button>
-          <button 
-            onClick={onSave}
-            className="bg-white border border-slate-300 text-slate-700 px-4 py-2 rounded-lg font-medium hover:bg-slate-50 flex items-center gap-2"
-          >
-             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>
-             保存草稿
-          </button>
+        <button onClick={onBack} className="text-slate-500 hover:text-slate-800 flex items-center gap-2 font-medium">
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+          返回工作台
+        </button>
+        <button onClick={onSave} className="bg-white border border-slate-300 text-slate-700 px-4 py-2 rounded-lg font-medium hover:bg-slate-50 flex items-center gap-2">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>
+          保存项目
+        </button>
       </div>
 
-      <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
-        <h2 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-3">
-          <span className="bg-blue-100 text-blue-600 p-2 rounded-lg">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-          </span>
-          步骤 1: 新颖性及授权概率评估
-        </h2>
-        
-        <div className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">专利/发明名称</label>
-            <input
-              type="text"
-              value={patentData.title}
-              onChange={(e) => updatePatentData('title', e.target.value)}
-              placeholder="例如：一种基于深度学习的图像去噪方法"
-              className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all bg-white text-slate-900 placeholder-slate-400"
-            />
-          </div>
-          
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <label className="block text-sm font-medium text-slate-700">发明内容概要（核心技术点）</label>
-              <button
-                onClick={handleAutoFill}
-                disabled={isGeneratingIdea || !patentData.title}
-                className="text-xs px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full hover:bg-indigo-100 transition-colors flex items-center gap-1 disabled:opacity-50"
-              >
-                {isGeneratingIdea ? (
-                   <span className="animate-pulse">AI 深度构思中...</span>
-                ) : (
-                   <>
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                      AI 自动联想 (TRIZ 创新)
-                   </>
-                )}
-              </button>
+      <section className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="px-8 py-7 bg-gradient-to-r from-slate-950 via-slate-900 to-cyan-950 text-white">
+          <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6">
+            <div>
+              <div className="text-cyan-300 text-sm font-semibold tracking-[0.2em] uppercase mb-3">Disclosure First</div>
+              <h2 className="text-3xl font-bold mb-3">步骤 1：访谈式技术交底采集</h2>
+              <p className="text-slate-300 max-w-3xl leading-relaxed">
+                先把技术讲清楚，再生成专利。你只需要用工程语言描述问题、方案、实施例和效果，系统会帮你整理成可起草的交底书骨架。
+              </p>
             </div>
-            
-            <RichTextEditor
-              value={patentData.inventionContent}
-              onChange={(val) => updatePatentData('inventionContent', val)}
-              placeholder="简要描述本发明解决了什么问题，采用了什么核心技术手段（如结构、算法、工艺流程等）... (支持 Markdown 和 LaTeX 公式)"
-              className="min-h-[160px]"
-            />
-          </div>
-
-          <button
-            onClick={handleSearch}
-            disabled={isSearching || isPreparingDraft || isOptimizing}
-            className="w-full bg-blue-600 text-white font-semibold py-4 rounded-xl hover:bg-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-          >
-            {isSearching ? (
-              <>
-                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                正在进行全球检索与分析...
-              </>
-            ) : (
-              "开始新颖性检索与评估"
-            )}
-          </button>
-          
-          {error && (
-            <div className="p-4 bg-red-50 text-red-600 rounded-xl border border-red-100">
-              {error}
+            <div className="min-w-[240px] bg-white/10 border border-white/10 rounded-2xl p-5 backdrop-blur-sm">
+              <div className="flex items-center justify-between text-sm text-slate-200 mb-2">
+                <span>交底完整度</span>
+                <span className="text-xl font-bold text-white">{draftReadiness}%</span>
+              </div>
+              <div className="h-3 bg-white/10 rounded-full overflow-hidden mb-3">
+                <div className="h-full bg-gradient-to-r from-cyan-300 via-sky-300 to-emerald-300 rounded-full" style={{ width: `${Math.max(8, draftReadiness)}%` }} />
+              </div>
+              <div className="text-xs text-slate-300">
+                {draftReadiness >= 60 ? '已满足起草前最小完整度，可进入专利起草。' : '建议先补齐技术问题、关键特征和实施方式。'}
+              </div>
             </div>
-          )}
+          </div>
         </div>
-      </div>
 
-      {report && (
-        <div className="bg-white p-8 rounded-2xl shadow-lg border border-blue-100 animate-fade-in-up">
-          <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
-            <div className="flex items-center gap-4">
-                 <h3 className="text-xl font-bold text-slate-800">评估报告</h3>
-                <div className="flex items-center gap-2 bg-slate-100 px-3 py-1 rounded-lg">
-                  <span className="text-sm text-slate-500">预估成功率:</span>
-                  <div className={`text-2xl font-bold ${
-                    report.score >= 80 ? 'text-green-600' : report.score >= 60 ? 'text-yellow-600' : 'text-red-600'
-                  }`}>
-                    {report.score}%
+        <div className="p-8 grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr] gap-8">
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">发明名称</label>
+                <input
+                  ref={titleInputRef}
+                  type="text"
+                  value={patentData.title}
+                  onChange={(e) => updatePatentData('title', e.target.value)}
+                  placeholder="例如：一种面向工业视觉的缺陷自适应检测方法"
+                  className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all bg-white text-slate-900 placeholder-slate-400"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">当前阶段</label>
+                <div className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 text-slate-700">
+                  {patentData.status === 'drafting' ? '已进入专利起草' : patentData.status === 'disclosure_review' ? '待确认交底书' : '交底采集中'}
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 rounded-2xl border border-slate-200 p-5">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">原始技术口述</h3>
+                  <p className="text-sm text-slate-500 mt-1">像和专利工程师开会一样，把背景、改进点、关键结构、流程和效果先说出来。</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button onClick={handleGenerateInterviewDraft} disabled={isGeneratingIdea || isStructuring} className="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium hover:bg-slate-800 disabled:opacity-50">
+                    {isGeneratingIdea ? 'AI 生成中...' : 'AI 生成访谈草稿'}
+                  </button>
+                  <button onClick={handleExtractMarkdown} disabled={isGeneratingIdea || isStructuring} className="px-4 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-medium hover:bg-slate-50 disabled:opacity-50">
+                    从 Markdown 提取结构要点
+                  </button>
+                  <button onClick={handleStructureDisclosure} disabled={isStructuring || isGeneratingIdea} className="px-4 py-2 rounded-lg bg-cyan-600 text-white text-sm font-medium hover:bg-cyan-700 disabled:opacity-50">
+                    {isStructuring ? 'AI 整理中...' : 'AI 整理成交底书'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                {disclosureTemplates.map((template) => (
+                  <button
+                    key={template.id}
+                    type="button"
+                    onClick={() => handleApplyTemplate(template.id)}
+                    className="text-left rounded-2xl border border-slate-200 bg-white p-4 hover:border-cyan-300 hover:bg-cyan-50 transition-all"
+                  >
+                    <div className="text-sm font-semibold text-slate-900 mb-1">{template.name}</div>
+                    <div className="text-xs text-slate-500 leading-relaxed">{template.hint}</div>
+                    <div className="mt-3 text-xs font-medium text-cyan-700">一键填入访谈提纲</div>
+                  </button>
+                ))}
+              </div>
+
+              <div ref={disclosureNotesRef}>
+                <RichTextEditor
+                  value={patentData.disclosureNotes}
+                  onChange={(value) => {
+                    updatePatentData('disclosureNotes', value);
+                    updatePatentData('claimStrategyConfirmed', false);
+                  }}
+                  format="markdown"
+                  editorId="disclosureNotes"
+                  focusSignal={focusTarget?.id === 'disclosureNotes' ? focusTarget.tick : 0}
+                  placeholder={'建议至少回答这些问题：\n1. 现有方案哪里不好？\n2. 你的核心改进是什么？\n3. 关键结构/算法/步骤是什么？\n4. 如何实施？\n5. 效果如何证明？'}
+                  className="min-h-[300px]"
+                />
+              </div>
+              <div className="mt-3 text-xs text-slate-500 leading-relaxed">
+                支持 Markdown 语法，可直接使用标题、列表、加粗、公式等格式整理交底内容。
+              </div>
+              {localParseTips.length > 0 && (
+                <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50 p-4">
+                  <div className="text-sm font-semibold text-emerald-800 mb-2">本地提取结果</div>
+                  <div className="space-y-1 text-sm text-emerald-700">
+                    {localParseTips.map((item) => (
+                      <div key={item}>• {item}</div>
+                    ))}
                   </div>
                 </div>
+              )}
             </div>
-            
-            <div className="flex items-center gap-3">
-                {/* Show Optimize button explicitly if score < 90 (User Requirement) */}
-                {report.score < 90 && (
-                    <div className="flex flex-col items-end">
-                        <span className="text-xs text-amber-600 mb-1 font-medium">成功率未达90%，建议优化</span>
-                        <button 
-                            onClick={handleOptimize}
-                            disabled={isOptimizing}
-                            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-all flex items-center gap-2 disabled:opacity-50 animate-pulse-slow"
-                        >
-                            {isOptimizing ? (
-                                <span className="animate-pulse">AI 优化中...</span>
-                            ) : (
-                                <>
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                                    基于报告优化方案
-                                </>
-                            )}
-                        </button>
-                    </div>
-                )}
 
-                <button 
-                    onClick={handleProceedToDraft}
-                    disabled={isPreparingDraft}
-                    className={`${
-                        report.score >= 80 
-                            ? 'bg-green-600 hover:bg-green-700 text-white' 
-                            : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50'
-                    } px-4 py-2 rounded-lg font-semibold shadow-sm transition-all flex items-center gap-2 disabled:opacity-50`}
-                >
-                    {isPreparingDraft ? (
-                        <span className="animate-pulse">AI 准备中...</span>
-                    ) : (
-                        <>
-                            前往撰写
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
-                        </>
-                    )}
-                </button>
+            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <div className="flex items-center justify-between mb-4 gap-3">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">多轮交底访谈</h3>
+                  <p className="text-sm text-slate-500 mt-1">让 AI 像专利代理师一样持续追问，把技术信息一轮轮问完整。</p>
+                </div>
+                <div className="text-xs text-slate-400">最近 8 轮会作为上下文</div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 max-h-[360px] overflow-y-auto space-y-3 mb-4">
+                {patentData.disclosureInterview.length > 0 ? (
+                  patentData.disclosureInterview.map((turn, index) => (
+                    <div key={`${turn.timestamp}-${index}`} className={`flex ${turn.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${turn.role === 'user' ? 'bg-slate-900 text-white' : 'bg-white text-slate-700 border border-slate-200'}`}>
+                        <div
+                          className={`prose prose-sm max-w-none ${turn.role === 'user' ? 'prose-invert' : 'prose-slate'}`}
+                          dangerouslySetInnerHTML={{ __html: renderMarkdown(turn.text) }}
+                        />
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-slate-500 leading-relaxed">
+                    可以直接输入一句技术说明开始访谈，例如“现有方案在低照度下误检率很高，我们加了温漂补偿和双阶段检测”。
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-3 mb-4">
+                <RichTextEditor
+                  value={interviewInput}
+                  onChange={setInterviewInput}
+                  format="markdown"
+                  placeholder="输入本轮补充说明，AI 会自动追问缺失信息并更新交底结构。"
+                  className="min-h-[220px]"
+                />
+                <div className="flex justify-end">
+                  <button
+                    onClick={handleInterviewSend}
+                    disabled={isInterviewing || !interviewInput.trim()}
+                    className="px-5 py-3 rounded-xl bg-slate-900 text-white font-semibold hover:bg-slate-800 disabled:opacity-50"
+                  >
+                    {isInterviewing ? '访谈中...' : '发送并继续访谈'}
+                  </button>
+                </div>
+              </div>
+
+              {patentData.disclosurePendingQuestions.length > 0 && (
+                <div className="p-4 rounded-xl bg-cyan-50 border border-cyan-100">
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <div className="text-sm font-semibold text-cyan-800">下一轮建议追问</div>
+                    <div className="text-xs text-cyan-700">点击即可回填到当前访谈输入框</div>
+                  </div>
+                  <ul className="space-y-2 text-sm text-cyan-700">
+                    {patentData.disclosurePendingQuestions.map((question) => (
+                      <li key={question}>
+                        <button
+                          type="button"
+                          onClick={() => handleApplyPendingQuestion(question)}
+                          className="w-full text-left px-3 py-2 rounded-lg hover:bg-white/80 transition-colors"
+                        >
+                          • {question}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+                <label className="block text-sm font-semibold text-slate-800 mb-2">要解决的技术问题</label>
+                <div ref={technicalProblemRef}>
+                  <RichTextEditor
+                    value={patentData.technicalProblem}
+                    onChange={(value) => {
+                      updatePatentData('technicalProblem', value);
+                      updatePatentData('claimStrategyConfirmed', false);
+                    }}
+                    format="markdown"
+                    editorId="technicalProblem"
+                    focusSignal={focusTarget?.id === 'technicalProblem' ? focusTarget.tick : 0}
+                    placeholder="一句话说清楚：为什么非做这个方案不可？"
+                    className="min-h-[180px]"
+                  />
+                </div>
+              </div>
+              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+                <label className="block text-sm font-semibold text-slate-800 mb-2">现有方案缺陷</label>
+                <div ref={existingSolutionIssuesRef}>
+                  <RichTextEditor
+                    value={patentData.existingSolutionIssues}
+                    onChange={(value) => {
+                      updatePatentData('existingSolutionIssues', value);
+                      updatePatentData('claimStrategyConfirmed', false);
+                    }}
+                    format="markdown"
+                    editorId="existingSolutionIssues"
+                    focusSignal={focusTarget?.id === 'existingSolutionIssues' ? focusTarget.tick : 0}
+                    placeholder="从成本、精度、稳定性、效率、维护复杂度等维度写现有痛点。"
+                    className="min-h-[180px]"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <label className="block text-sm font-semibold text-slate-800 mb-2">结构化交底摘要</label>
+              <div ref={disclosureSummaryRef}>
+                <RichTextEditor
+                  value={patentData.disclosureSummary}
+                  onChange={(value) => {
+                    updatePatentData('disclosureSummary', value);
+                    updatePatentData('claimStrategyConfirmed', false);
+                  }}
+                  format="markdown"
+                  editorId="disclosureSummary"
+                  focusSignal={focusTarget?.id === 'disclosureSummary' ? focusTarget.tick : 0}
+                  placeholder="这里保存 AI 整理后的技术交底书摘要，后续会作为专利起草主输入。"
+                  className="min-h-[220px]"
+                />
+              </div>
             </div>
           </div>
 
-          <div className="space-y-6">
-            <div className="p-6 bg-slate-50 rounded-xl border border-slate-200">
-              <h4 className="font-semibold text-slate-800 mb-3">AI 审查意见分析</h4>
-              <div 
-                  className="text-slate-600 leading-relaxed prose prose-sm max-w-none prose-slate"
-                  dangerouslySetInnerHTML={{ __html: renderMarkdown(report.analysis) }} 
-              />
+          <div className="space-y-5">
+            <div className="bg-slate-50 rounded-2xl border border-slate-200 p-5">
+              <h3 className="text-lg font-bold text-slate-900 mb-4">结构化交底卡片</h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">关键技术特征</label>
+                  <div ref={technicalHighlightsRef}>
+                    <RichTextEditor
+                      value={joinLines(patentData.technicalHighlights.map((item) => `- ${item}`))}
+                      onChange={(value) => updateListField('technicalHighlights', value)}
+                      format="markdown"
+                      editorId="technicalHighlights"
+                      focusSignal={focusTarget?.id === 'technicalHighlights' ? focusTarget.tick : 0}
+                      placeholder={'每行一条，例如：\n采用双阶段检测网络过滤背景噪声\n引入温漂补偿模块修正传感误差'}
+                      className="min-h-[220px]"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">实施方式/实施步骤</label>
+                  <div ref={embodimentsRef}>
+                    <RichTextEditor
+                      value={joinLines(patentData.embodiments.map((item) => `- ${item}`))}
+                      onChange={(value) => updateListField('embodiments', value)}
+                      format="markdown"
+                      editorId="embodiments"
+                      focusSignal={focusTarget?.id === 'embodiments' ? focusTarget.tick : 0}
+                      placeholder={'每行一条，例如：\n实施例1：在产线边缘节点部署轻量模型\n实施例2：通过标定模板自动生成补偿参数'}
+                      className="min-h-[220px]"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">技术效果</label>
+                  <div ref={advantagesRef}>
+                    <RichTextEditor
+                      value={joinLines(patentData.advantages.map((item) => `- ${item}`))}
+                      onChange={(value) => updateListField('advantages', value)}
+                      format="markdown"
+                      editorId="advantages"
+                      focusSignal={focusTarget?.id === 'advantages' ? focusTarget.tick : 0}
+                      placeholder={'每行一条，例如：\n误检率降低 18%\n在低照度环境下仍保持稳定检测'}
+                      className="min-h-[200px]"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">替代方案与扩展点</label>
+                  <RichTextEditor
+                    value={joinLines(patentData.alternativeSolutions.map((item) => `- ${item}`))}
+                    onChange={(value) => updateListField('alternativeSolutions', value)}
+                    format="markdown"
+                    placeholder={'每行一条，例如：\n检测模块可替换为 Transformer 架构\n结构件可从金属改为复合材料'}
+                    className="min-h-[200px]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">证据/实验/参数材料</label>
+                  <div ref={evidenceMaterialsRef}>
+                    <RichTextEditor
+                      value={joinLines(patentData.evidenceMaterials.map((item) => `- ${item}`))}
+                      onChange={(value) => updateListField('evidenceMaterials', value)}
+                      format="markdown"
+                      editorId="evidenceMaterials"
+                      focusSignal={focusTarget?.id === 'evidenceMaterials' ? focusTarget.tick : 0}
+                      placeholder={'每行一条，例如：\n对比实验：与传统方法相比处理时延降低 35%\n关键参数：采样频率为 200Hz'}
+                      className="min-h-[200px]"
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
 
-            <div>
-              <h4 className="font-semibold text-slate-800 mb-3 flex items-center gap-2">
-                <svg className="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                </svg>
-                检出的相关现有技术 (Prior Art)
-              </h4>
-              <div className="grid gap-3">
-                {Array.isArray(report.priorArtLinks) && report.priorArtLinks.length > 0 ? (
-                    report.priorArtLinks.map((link, i) => (
-                    <a 
-                        key={i} 
-                        href={link.uri} 
-                        target="_blank" 
-                        rel="noreferrer"
-                        className="block p-4 rounded-lg border border-slate-200 hover:border-blue-400 hover:bg-blue-50 transition-all group w-full overflow-hidden"
-                    >
-                        <div className="flex flex-col gap-1 w-full">
-                        <span className="font-medium text-slate-700 group-hover:text-blue-700 truncate block w-full" title={link.title}>
-                            {link.title || "未知标题"}
-                        </span>
-                        <span className="text-xs text-slate-400 group-hover:text-blue-500 break-all line-clamp-2">
-                            {link.uri}
-                        </span>
-                        </div>
-                    </a>
-                    ))
-                ) : (
-                    <p className="text-slate-500 text-sm italic p-4 bg-slate-50 rounded-lg">未找到明确的现有技术链接。</p>
+            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <h3 className="text-lg font-bold text-slate-900 mb-4">起草前检查</h3>
+              <div className="space-y-3 mb-4">
+                {readinessItems.map((item) => (
+                  <button
+                    key={item.label}
+                    type="button"
+                    onClick={() => focusField(item.target as keyof typeof fieldRefs)}
+                    className={`w-full flex items-center justify-between gap-3 text-sm rounded-xl px-3 py-2 transition-colors ${item.completed ? 'hover:bg-slate-50' : 'bg-amber-50 hover:bg-amber-100/70'}`}
+                  >
+                    <div className="flex items-center gap-2 text-slate-700">
+                      <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${item.completed ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
+                        {item.completed ? '✓' : '·'}
+                      </span>
+                      {item.label}
+                    </div>
+                    <span className="text-xs text-slate-400">{item.completed ? `+${item.weight}` : '点击去补充'}</span>
+                  </button>
+                ))}
+              </div>
+
+              {riskTips.length > 0 && (
+                <div className="mb-4 p-4 bg-amber-50 border border-amber-100 rounded-xl">
+                  <div className="text-sm font-semibold text-amber-800 mb-2">AI 识别的缺口</div>
+                  <ul className="space-y-2 text-sm text-amber-700">
+                    {riskTips.map((risk) => (
+                      <li key={risk}>• {risk}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
+                <div className="text-sm font-semibold text-slate-800 mb-2">建议的保护骨架</div>
+                <pre className="whitespace-pre-wrap text-sm text-slate-600 leading-relaxed font-sans">
+                  {patentData.claimStrategy || claimStrategyDraft || '当关键技术特征整理完成后，这里会自动生成起草建议。'}
+                </pre>
+                {patentData.independentClaimSkeleton && (
+                  <div className="mt-4 pt-4 border-t border-slate-200">
+                    <div className="text-sm font-semibold text-slate-800 mb-2">独立权利要求骨架</div>
+                    <pre className="whitespace-pre-wrap text-sm text-slate-600 leading-relaxed font-sans">{patentData.independentClaimSkeleton}</pre>
+                  </div>
+                )}
+                {patentData.dependentClaimOptions.length > 0 && (
+                  <div className="mt-4 pt-4 border-t border-slate-200">
+                    <div className="text-sm font-semibold text-slate-800 mb-2">从属层级建议</div>
+                    <ul className="space-y-2 text-sm text-slate-600">
+                      {patentData.dependentClaimOptions.map((item) => (
+                        <li key={item}>• {item}</li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
               </div>
             </div>
           </div>
         </div>
-      )}
+      </section>
+
+      <section className="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 space-y-6">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          <div>
+            <h3 className="text-2xl font-bold text-slate-900">挑战式新颖性检索</h3>
+            <p className="text-slate-500 mt-2">
+              不是为了卡住工程师，而是为了在起草前用现有技术反向挑战你的方案，帮助补强差异点和保护边界。
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <button onClick={handleSearch} disabled={isSearching || isPreparingDraft || isOptimizing} className="px-5 py-3 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
+              {isSearching ? '正在挑战式检索...' : '开始检索与对抗分析'}
+            </button>
+            <button onClick={handleProceedToDraft} disabled={isPreparingDraft} className="px-5 py-3 rounded-xl bg-slate-900 text-white font-semibold hover:bg-slate-800 disabled:opacity-50">
+              {isPreparingDraft ? '正在准备起草...' : '交底完成，进入专利起草'}
+            </button>
+          </div>
+        </div>
+
+        {error && <div className="p-4 bg-red-50 text-red-600 rounded-xl border border-red-100">{error}</div>}
+
+        {report && (
+          <div className="space-y-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <div className="text-sm text-slate-500 mb-1">挑战结果</div>
+                <div className="text-2xl font-bold text-slate-900">预估授权通过率 {report.score}%</div>
+              </div>
+              <div className="flex items-center gap-3">
+                {report.score < 90 && (
+                  <button onClick={handleOptimize} disabled={isOptimizing} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-all disabled:opacity-50">
+                    {isOptimizing ? 'AI 补强中...' : '基于检索结果补强交底'}
+                  </button>
+                )}
+                <div className={`px-4 py-2 rounded-lg text-sm font-semibold ${report.score >= 80 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+                  {report.score >= 80 ? '当前方案可进入起草' : '建议补强后再起草'}
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 bg-slate-50 rounded-xl border border-slate-200">
+              <h4 className="font-semibold text-slate-800 mb-3">AI 对抗分析</h4>
+              <div className="text-slate-600 leading-relaxed prose prose-sm max-w-none prose-slate" dangerouslySetInnerHTML={{ __html: renderMarkdown(report.analysis) }} />
+            </div>
+
+            <div>
+              <h4 className="font-semibold text-slate-800 mb-3">相关现有技术</h4>
+              <div className="grid gap-3">
+                {Array.isArray(report.priorArtLinks) && report.priorArtLinks.length > 0 ? (
+                  report.priorArtLinks.map((link, index) => (
+                    <a key={index} href={link.uri} target="_blank" rel="noreferrer" className="block p-4 rounded-lg border border-slate-200 hover:border-blue-400 hover:bg-blue-50 transition-all group w-full overflow-hidden">
+                      <div className="flex flex-col gap-1 w-full">
+                        <span className="font-medium text-slate-700 group-hover:text-blue-700 truncate block w-full" title={link.title}>{link.title || '未知标题'}</span>
+                        <span className="text-xs text-slate-400 group-hover:text-blue-500 break-all line-clamp-2">{link.uri}</span>
+                      </div>
+                    </a>
+                  ))
+                ) : (
+                  <p className="text-slate-500 text-sm italic p-4 bg-slate-50 rounded-lg">未找到明确的现有技术链接。</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
 
       {optimizedContent && (
-        <div className="bg-indigo-50 p-8 rounded-2xl shadow-lg border border-indigo-200 animate-fade-in-up mt-8">
+        <section className="bg-indigo-50 p-8 rounded-2xl shadow-lg border border-indigo-200 animate-fade-in-up mt-8">
           <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
-            <h3 className="text-xl font-bold text-indigo-900 flex items-center gap-2">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-              AI 优化方案建议
-            </h3>
+            <h3 className="text-xl font-bold text-indigo-900">AI 建议的交底补强方案</h3>
             <div className="flex gap-3">
-              <button
-                onClick={() => {
-                  const newContent = `${patentData.inventionContent}\n\n<hr />\n<h3>【AI 优化方案建议】</h3>\n${optimizedContent}`;
-                  updatePatentData('inventionContent', newContent);
-                  setOptimizedContent(null);
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                }}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-all"
-              >
-                采纳建议并将其追加到已有内容末尾
+              <button onClick={handleAcceptOptimization} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-all">
+                采纳并写入交底摘要
               </button>
-              <button
-                onClick={() => setOptimizedContent(null)}
-                className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg font-semibold shadow-sm transition-all"
-              >
+              <button onClick={() => setOptimizedContent(null)} className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg font-semibold shadow-sm transition-all">
                 忽略
               </button>
             </div>
           </div>
           <div className="bg-white p-6 rounded-xl border border-indigo-100 max-h-[500px] overflow-y-auto">
-            <div 
-                className="text-slate-700 leading-relaxed prose prose-sm max-w-none prose-indigo"
-                dangerouslySetInnerHTML={{ __html: optimizedContent }} 
-            />
+            <div className="text-slate-700 leading-relaxed prose prose-sm max-w-none prose-indigo" dangerouslySetInnerHTML={{ __html: optimizedContent }} />
           </div>
-        </div>
+        </section>
       )}
     </div>
   );
