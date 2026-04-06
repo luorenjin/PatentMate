@@ -1,9 +1,10 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { AppView, PatentData, ReviewResult, ReviewIssue } from '../types';
 import { refineText, regenerateClaimStrategyFromReview, runFinalPatentReview } from '../services/geminiService';
 import { renderMarkdown } from '../services/markdownService';
 import { RichTextEditor } from './RichTextEditor';
+import { exportToDocx, exportToPdf, downloadBlob } from '../services/exportService';
 
 interface EditorProps {
   patentData: PatentData;
@@ -14,14 +15,14 @@ interface EditorProps {
 }
 
 // Helper to strip HTML tags to get plain text for AI inputs
-const stripHtml = (html: string) => {
+const stripHtml = (html?: string) => {
     const tmp = document.createElement('DIV');
-    tmp.innerHTML = html;
+    tmp.innerHTML = html || '';
     return tmp.textContent || tmp.innerText || '';
 };
 
 // Helper to auto-number paragraphs for Description sections [0001], [0002]...
-const formatTextWithNumbering = (content: string, startCount: number = 1): { html: React.ReactNode, nextCount: number } => {
+const formatTextWithNumbering = (content?: string, startCount: number = 1): { html: React.ReactNode, nextCount: number } => {
     if (!content) return { html: <p className="text-slate-400 text-sm mb-2">[暂无内容]</p>, nextCount: startCount };
     
     let blocks: { isBlock: boolean, content: string }[] = [];
@@ -91,6 +92,18 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
   // Preview State
   const [showPreview, setShowPreview] = useState(false);
 
+  // Paragraph Selection & Polish State
+  const [selectedParagraphs, setSelectedParagraphs] = useState<number[]>([]);
+  const [showPolishToolbar, setShowPolishToolbar] = useState(false);
+  const [polishPosition, setPolishPosition] = useState({ x: 0, y: 0 });
+  const [isPolishing, setIsPolishing] = useState(false);
+
+  // Validation State
+  const [validationIssues, setValidationIssues] = useState<{ section: string; issue: string; severity: 'error' | 'warning' | 'info' }[]>([]);
+
+  // Export State
+  const [isExporting, setIsExporting] = useState(false);
+
   const appendTextBlock = (current: string, title: string, content: string) => {
       const block = `${title}\n- ${content}`;
       if (current.includes(content)) return current;
@@ -100,6 +113,109 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
   const mergeStrategyRisk = (risk: string) => {
       if (patentData.strategyRisks.includes(risk)) return;
       updatePatentData('strategyRisks', [...patentData.strategyRisks, risk]);
+  };
+
+  // Validation Checker
+  const validatePatent = () => {
+      const issues: typeof validationIssues = [];
+
+      // Abstract validation: 200-300 characters
+      const abstractText = stripHtml(patentData.abstract);
+      if (!abstractText) {
+          issues.push({ section: '摘要', issue: '摘要为空', severity: 'error' });
+      } else if (abstractText.length < 50) {
+          issues.push({ section: '摘要', issue: `摘要过短 (${abstractText.length}字符)，建议50-300字符`, severity: 'warning' });
+      } else if (abstractText.length > 300) {
+          issues.push({ section: '摘要', issue: `摘要过长 (${abstractText.length}字符)，建议控制在300字符以内`, severity: 'warning' });
+      }
+
+      // Claims validation
+      const claimsText = stripHtml(patentData.claims);
+      if (!claimsText) {
+          issues.push({ section: '权利要求书', issue: '权利要求书为空', severity: 'error' });
+      } else if (!/^1\./m.test(claimsText)) {
+          issues.push({ section: '权利要求书', issue: '独立权利要求应从"1."开始', severity: 'error' });
+      }
+
+      // Description validation
+      const hasBackground = stripHtml(patentData.backgroundArt).length > 20;
+      const hasPurpose = stripHtml(patentData.inventionContent).length > 20;
+      const hasSolution = stripHtml(patentData.inventionContent).includes('解决') || stripHtml(patentData.inventionContent).includes('方案');
+      const hasEmbodiments = stripHtml(patentData.detailedDescription).length > 50;
+
+      if (!hasBackground) {
+          issues.push({ section: '说明书', issue: '背景技术描述不足', severity: 'warning' });
+      }
+      if (!hasPurpose) {
+          issues.push({ section: '说明书', issue: '发明目的/技术问题不明确', severity: 'warning' });
+      }
+      if (!hasSolution) {
+          issues.push({ section: '说明书', issue: '未明确技术方案或解决手段', severity: 'warning' });
+      }
+      if (!hasEmbodiments) {
+          issues.push({ section: '说明书', issue: '具体实施方式内容不足', severity: 'error' });
+      }
+
+      setValidationIssues(issues);
+  };
+
+  useEffect(() => {
+      validatePatent();
+  }, [patentData.abstract, patentData.claims, patentData.backgroundArt, patentData.inventionContent, patentData.detailedDescription]);
+
+  // Paragraph selection handlers
+  const handleParagraphSelect = (index: number, event: React.MouseEvent) => {
+      if (event.shiftKey && selectedParagraphs.length > 0) {
+          // Multi-select with Shift+Click
+          const lastSelected = selectedParagraphs[selectedParagraphs.length - 1];
+          const start = Math.min(lastSelected, index);
+          const end = Math.max(lastSelected, index);
+          const range = Array.from({ length: end - start + 1 }, (_, i) => start + i);
+          setSelectedParagraphs([...new Set([...selectedParagraphs, ...range])]);
+      } else if (event.ctrlKey || event.metaKey) {
+          // Toggle selection with Ctrl/Cmd+Click
+          if (selectedParagraphs.includes(index)) {
+              setSelectedParagraphs(selectedParagraphs.filter(i => i !== index));
+          } else {
+              setSelectedParagraphs([...selectedParagraphs, index]);
+          }
+      } else {
+          // Single select
+          setSelectedParagraphs([index]);
+      }
+  };
+
+  const handleTextSelection = () => {
+      const selection = window.getSelection();
+      if (selection && selection.toString().trim().length > 10) {
+          const range = selection.getRangeAt(0);
+          const rect = range.getBoundingClientRect();
+          setPolishPosition({ x: rect.left + rect.width / 2, y: rect.top - 40 });
+          setShowPolishToolbar(true);
+      } else {
+          setShowPolishToolbar(false);
+      }
+  };
+
+  const handlePolishSelection = async () => {
+      const selection = window.getSelection();
+      if (!selection || selection.toString().trim().length < 10) return;
+
+      const selectedText = selection.toString().trim();
+      setIsPolishing(true);
+      try {
+          const polished = await refineText(selectedText, 'polish');
+          // Replace selected text with polished version
+          const range = selection.getRangeAt(0);
+          range.deleteContents();
+          range.insertNode(document.createTextNode(polished));
+          setShowPolishToolbar(false);
+          selection.removeAllRanges();
+      } catch (err) {
+          console.error('Polish failed:', err);
+      } finally {
+          setIsPolishing(false);
+      }
   };
 
   const handleWriteBackToStrategy = (issue: ReviewIssue) => {
@@ -166,9 +282,35 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
     }
   };
 
-  const handleExport = () => {
+  const handleExportDocx = async () => {
+    setIsExporting(true);
+    try {
+        const blob = await exportToDocx(patentData);
+        downloadBlob(blob, `${patentData.title || 'patent'}_申请书.docx`);
+    } catch (err) {
+        console.error('DOCX export failed:', err);
+        alert('导出失败，请重试');
+    } finally {
+        setIsExporting(false);
+    }
+  };
+
+  const handleExportPdf = async () => {
+    setIsExporting(true);
+    try {
+        const blob = await exportToPdf(patentData);
+        downloadBlob(blob, `${patentData.title || 'patent'}_申请书.pdf`);
+    } catch (err) {
+        console.error('PDF export failed:', err);
+        alert('导出失败，请重试');
+    } finally {
+        setIsExporting(false);
+    }
+  };
+
+  const handleExportLegacy = () => {
     const { title, technicalField, backgroundArt, inventionContent, abstract, claims, descriptionOfDrawings, detailedDescription } = patentData;
-    
+
     // Simple export needs to strip HTML for now as we are creating a basic .doc blob
     const clean = (html: string | undefined) => stripHtml(html || '');
 
@@ -261,7 +403,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
       if (!showPreview) return null;
 
       let pCount = 1;
-      const renderDescriptionSection = (title: string, content: string) => {
+      const renderDescriptionSection = (title: string, content?: string) => {
           const res = formatTextWithNumbering(content, pCount);
           pCount = res.nextCount;
           return (
@@ -332,7 +474,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                       <div className="space-y-16 flex flex-col items-center">
                           {patentData.drawings.map((img, idx) => (
                               <div key={idx} className="flex flex-col items-center w-full">
-                                  <img src={`data:image/jpeg;base64,${img}`} className="max-w-[80%] max-h-[600px] object-contain" alt={`Figure ${idx+1}`} />
+                                  <img src={`data:image/jpeg;base64,${img}`} className="max-w-4/5 max-h-150 object-contain" alt={`Figure ${idx+1}`} />
                                   <div className="mt-6 font-bold text-lg">图 {idx + 1}</div>
                               </div>
                           ))}
@@ -344,7 +486,29 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
   }, [showPreview, patentData]);
 
   return (
-    <div className="h-full flex flex-col relative">
+    <div className="h-full flex flex-col relative" onMouseUp={handleTextSelection} onMouseDown={() => setShowPolishToolbar(false)}>
+       {/* Floating Polish Toolbar */}
+       {showPolishToolbar && (
+           <div
+               className="fixed z-50 bg-white border border-blue-200 rounded-lg shadow-xl px-3 py-2 flex items-center gap-2 animate-fade-in"
+               style={{ left: polishPosition.x, top: polishPosition.y, transform: 'translateX(-50%)' }}
+           >
+               <button
+                   onClick={handlePolishSelection}
+                   disabled={isPolishing}
+                   className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"
+               >
+                   {isPolishing ? (
+                       <svg className="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                   ) : (
+                       <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                   )}
+                   AI 润色
+               </button>
+               <div className="text-xs text-slate-400">选中文字后出现</div>
+           </div>
+       )}
+
        <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
               <div>
@@ -365,7 +529,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
        </div>
 
        {/* Header Actions */}
-       <div className="flex justify-between items-center mb-6 flex-shrink-0">
+    <div className="flex justify-between items-center mb-6 shrink-0">
           <div className="flex items-center gap-4">
               <button onClick={onBack} className="text-slate-500 hover:text-slate-800 flex items-center gap-2 font-medium">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
@@ -382,23 +546,40 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>
                 保存
             </button>
-            <button
-                onClick={handleExport}
-                className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-2 rounded-lg font-semibold hover:bg-blue-100 transition-all flex items-center gap-2"
-            >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4-4m0 0l-4-4m4 4h14" transform="rotate(90 12 12)" />
-                </svg>
-                导出 Word
-            </button>
+            <div className="relative group">
+                <button className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-2 rounded-lg font-semibold hover:bg-blue-100 transition-all flex items-center gap-2">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4-4m0 0l-4-4m4 4h14" transform="rotate(90 12 12)" />
+                    </svg>
+                    导出 {isExporting ? '中...' : ''}
+                </button>
+                <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-20 min-w-35">
+                    <button
+                        onClick={handleExportDocx}
+                        disabled={isExporting}
+                        className="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2 disabled:opacity-50"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                        导出 Word (.docx)
+                    </button>
+                    <button
+                        onClick={handleExportPdf}
+                        disabled={isExporting}
+                        className="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2 disabled:opacity-50"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg>
+                        导出 PDF (.pdf)
+                    </button>
+                </div>
+            </div>
           </div>
         </div>
 
-      <div className="flex-1 flex gap-6 overflow-hidden pb-2">
+      <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-4 lg:gap-6 overflow-hidden pb-2">
         {/* Left: Controls & Review Panel */}
-        <div className="w-80 flex flex-col gap-4">
+        <div className="w-full lg:w-80 lg:shrink-0 flex flex-col gap-4 overflow-y-auto pr-2 pb-4 custom-scrollbar">
             {/* Editing Controls */}
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-6 flex-shrink-0">
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-6 shrink-0">
                 <div>
                     <label className="block text-sm font-semibold text-slate-700 mb-2">选择章节</label>
                     <select
@@ -453,13 +634,52 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                 </div>
             </div>
 
+            {/* Format Validation Panel */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 shrink-0">
+                <h3 className="font-bold text-slate-800 mb-3 flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    格式校验
+                </h3>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {validationIssues.length === 0 ? (
+                        <div className="text-xs text-green-600 flex items-center gap-1 p-2 bg-green-50 rounded">
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                            所有检查项通过
+                        </div>
+                    ) : (
+                        validationIssues.map((issue, idx) => (
+                            <div
+                                key={idx}
+                                className={`text-xs p-2 rounded flex items-start gap-2 ${
+                                    issue.severity === 'error'
+                                        ? 'bg-red-50 text-red-700 border border-red-100'
+                                        : issue.severity === 'warning'
+                                        ? 'bg-amber-50 text-amber-700 border border-amber-100'
+                                        : 'bg-blue-50 text-blue-700 border border-blue-100'
+                                }`}
+                            >
+                                <span className="mt-0.5">
+                                    {issue.severity === 'error' ? '🔴' : issue.severity === 'warning' ? '🟡' : '🔵'}
+                                </span>
+                                <div>
+                                    <div className="font-semibold">{issue.section}</div>
+                                    <div>{issue.issue}</div>
+                                </div>
+                            </div>
+                        ))
+                    )}
+                </div>
+            </div>
+
             {/* Review Panel */}
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex-1 flex flex-col overflow-hidden">
-                 <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 shrink-0 flex flex-col gap-2">
+                 <h3 className="font-bold text-slate-800 mb-2 flex items-center gap-2">
                      <span className="text-xl">⚖️</span> AI 审查员
                  </h3>
 
-                 <div className="mb-4 p-3 bg-slate-50 rounded-lg border border-slate-100 flex-shrink-0">
+                 <div className="p-3 bg-slate-50 rounded-lg border border-slate-100 shrink-0">
                     <div className="text-xs font-bold text-slate-500 mb-1">策略同步状态</div>
                     <div className="text-xs text-slate-700 leading-relaxed">
                         {patentData.claimStrategyConfirmed ? '保护策略已确认' : '保护策略待重新确认'}
@@ -479,13 +699,13 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                  </div>
                  
                  {reviewResult ? (
-                     <div className="flex-1 flex flex-col gap-4 overflow-y-auto pr-1">
-                         <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg flex-shrink-0">
+                     <div className="flex flex-col gap-3">
+                         <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg shrink-0">
                              <span className="text-sm text-slate-500 font-medium">预估得分</span>
                              <span className={`text-2xl font-bold ${reviewResult.score >= 80 ? 'text-green-600' : 'text-red-500'}`}>{reviewResult.score}</span>
                          </div>
                          
-                         <div className="p-3 bg-slate-50 rounded-lg border border-slate-100 flex-shrink-0">
+                         <div className="p-3 bg-slate-50 rounded-lg border border-slate-100 shrink-0">
                              <p className="text-xs font-bold text-slate-500 mb-1">整体评价</p>
                              <p className="text-xs text-slate-700 leading-relaxed">{reviewResult.feedback}</p>
                          </div>
@@ -561,7 +781,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                              </div>
                          )}
 
-                         <div className="pt-2 border-t border-slate-100 flex-shrink-0 pb-6">
+                         <div className="pt-2 border-t border-slate-100 shrink-0 pb-6">
                             {reviewResult.passed ? (
                                 <button 
                                     onClick={handleMarkAsReady}
@@ -610,7 +830,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
         </div>
 
         {/* Right: Rich Text Editor Area */}
-        <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col rich-text-editor-container">
+        <div className="flex-1 min-w-0 min-h-0 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col rich-text-editor-container">
           <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
             <h3 className="font-bold text-slate-700">
               编辑内容: <span className="text-blue-600">{getSectionLabel(selectedSection)}</span>
@@ -634,7 +854,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
 
       {/* PREVIEW MODAL */}
       {showPreview && (
-          <div className="fixed inset-0 z-[100] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-100 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="bg-slate-100 w-full h-full max-w-6xl rounded-xl shadow-2xl flex flex-col overflow-hidden">
                   <div className="bg-white p-4 border-b border-slate-200 flex justify-between items-center shadow-sm z-10">
                       <div className="flex items-center gap-3">
@@ -642,11 +862,15 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                           <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">A4 打印视图</span>
                       </div>
                       <div className="flex gap-3">
-                        <button onClick={handleExport} className="text-blue-600 hover:bg-blue-50 px-3 py-2 rounded font-medium text-sm flex items-center gap-1">
-                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4-4m0 0l-4-4m4 4h14" /></svg>
-                             导出 Word
+                        <button onClick={handleExportDocx} disabled={isExporting} className="text-blue-600 hover:bg-blue-50 px-3 py-2 rounded font-medium text-sm flex items-center gap-1 disabled:opacity-50">
+                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                             Word
                         </button>
-                        <button 
+                        <button onClick={handleExportPdf} disabled={isExporting} className="text-red-600 hover:bg-red-50 px-3 py-2 rounded font-medium text-sm flex items-center gap-1 disabled:opacity-50">
+                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg>
+                             PDF
+                        </button>
+                        <button
                           onClick={() => setShowPreview(false)}
                           className="bg-slate-800 text-white px-4 py-2 rounded-lg hover:bg-slate-900 font-medium text-sm"
                         >

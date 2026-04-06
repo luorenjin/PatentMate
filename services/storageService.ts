@@ -1,6 +1,26 @@
-import { DisclosureInterviewTurn, PatentData } from "../types";
+import {
+  DisclosureAnswer,
+  DisclosureData,
+  DisclosureInterviewTurn,
+  DraftingProgress,
+  PatentData,
+  PatentType,
+  TechnicalField,
+} from "../types";
 
 const STORAGE_KEY = "patent_pro_data";
+const TECHNICAL_FIELDS: readonly TechnicalField[] = [
+  "AI",
+  "新能源",
+  "医疗器械",
+  "软件",
+  "机械",
+  "化工",
+  "电子",
+  "通信",
+  "生物",
+  "材料",
+];
 
 const normalizeStringArray = (value: unknown): string[] => {
   if (!Array.isArray(value)) return [];
@@ -26,6 +46,85 @@ const normalizeInterviewTurns = (value: unknown): DisclosureInterviewTurn[] => {
     }));
 };
 
+const normalizeDisclosureData = (
+  value: unknown,
+): DisclosureData | undefined => {
+  if (!value || typeof value !== "object") return undefined;
+  const data = value as Record<string, unknown>;
+  if (!data.type || !data.field || !data.title) return undefined;
+
+  const answers: DisclosureAnswer[] = Array.isArray(data.answers)
+    ? (data.answers as DisclosureAnswer[]).filter(
+        (a): a is DisclosureAnswer =>
+          typeof a === "object" &&
+          a !== null &&
+          typeof a.questionId === "string" &&
+          typeof a.answer === "string",
+      )
+    : [];
+
+  return {
+    type: data.type as PatentType,
+    field: data.field as TechnicalField,
+    title: data.title as string,
+    answers,
+    completedAt:
+      typeof data.completedAt === "number" ? data.completedAt : undefined,
+  };
+};
+
+const normalizeSelectedTechnicalField = (
+  value: unknown,
+): TechnicalField | undefined => {
+  return typeof value === "string" &&
+    TECHNICAL_FIELDS.includes(value as TechnicalField)
+    ? (value as TechnicalField)
+    : undefined;
+};
+
+const normalizeDraftingProgress = (
+  value: unknown,
+): DraftingProgress | undefined => {
+  if (!value || typeof value !== "object") return undefined;
+  const progress = value as Record<string, unknown>;
+  const stages = [
+    "abstract",
+    "claims",
+    "description",
+    "embodiment",
+    "drawings",
+  ] as const;
+
+  const result: Partial<DraftingProgress> = {};
+
+  for (const stage of stages) {
+    if (progress[stage] && typeof progress[stage] === "object") {
+      const stageData = progress[stage] as Record<string, unknown>;
+      result[stage] = {
+        content: typeof stageData.content === "string" ? stageData.content : "",
+        previousVersion:
+          typeof stageData.previousVersion === "string"
+            ? stageData.previousVersion
+            : undefined,
+        generatedAt:
+          typeof stageData.generatedAt === "number"
+            ? stageData.generatedAt
+            : undefined,
+        isConfirmed: stageData.isConfirmed === true,
+      };
+    }
+  }
+
+  if (progress.currentStage && typeof progress.currentStage === "string") {
+    result.currentStage =
+      progress.currentStage as DraftingProgress["currentStage"];
+  }
+
+  return Object.keys(result).length > 0
+    ? (result as DraftingProgress)
+    : undefined;
+};
+
 const normalizePatentData = (patent: Partial<PatentData>): PatentData => {
   const now = Date.now();
 
@@ -43,6 +142,16 @@ const normalizePatentData = (patent: Partial<PatentData>): PatentData => {
     createdAt: typeof patent.createdAt === "number" ? patent.createdAt : now,
     lastModified:
       typeof patent.lastModified === "number" ? patent.lastModified : now,
+    // New fields for Step 3-4
+    patentType: patent.patentType,
+    selectedTechnicalField: normalizeSelectedTechnicalField(
+      patent.selectedTechnicalField ??
+        patent.disclosureData?.field ??
+        patent.technicalField,
+    ),
+    disclosureData: normalizeDisclosureData(patent.disclosureData),
+    draftingProgress: normalizeDraftingProgress(patent.draftingProgress),
+    // Existing fields
     disclosureNotes: patent.disclosureNotes || "",
     disclosureSummary: patent.disclosureSummary || "",
     disclosureInterview: normalizeInterviewTurns(patent.disclosureInterview),
@@ -66,7 +175,8 @@ const normalizePatentData = (patent: Partial<PatentData>): PatentData => {
     reviewSummary: patent.reviewSummary || "",
     lastReviewScore:
       typeof patent.lastReviewScore === "number" ? patent.lastReviewScore : 0,
-    technicalField: patent.technicalField || "",
+    technicalField:
+      typeof patent.technicalField === "string" ? patent.technicalField : "",
     backgroundArt: patent.backgroundArt || "",
     inventionContent: patent.inventionContent || "",
     descriptionOfDrawings: patent.descriptionOfDrawings || "",
@@ -166,6 +276,7 @@ export const createNewPatentData = (): PatentData => {
     draftReadiness: 0,
     reviewSummary: "",
     lastReviewScore: 0,
+    selectedTechnicalField: undefined,
     technicalField: "",
     backgroundArt: "",
     inventionContent: "",

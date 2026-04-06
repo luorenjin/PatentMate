@@ -4,11 +4,12 @@ import { ChatSession, createChatSession } from '../services/geminiService';
 
 interface ChatAssistantProps {
   isOpen: boolean;
+  onToggle: () => void;
   currentView: AppView;
   patentData: PatentData | null;
 }
 
-const ChatAssistant: React.FC<ChatAssistantProps> = ({ isOpen, currentView, patentData }) => {
+const ChatAssistant: React.FC<ChatAssistantProps> = ({ isOpen, onToggle, currentView, patentData }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'model', text: '您好，我是您的技术交底助手。您可以让我帮助梳理技术问题、补齐交底要点，或解释专利申请流程。', timestamp: Date.now() }
   ]);
@@ -83,10 +84,22 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ isOpen, currentView, pate
     }
   };
 
-  if (!isOpen) return null;
+  if (!isOpen) {
+    return (
+      <button
+        onClick={onToggle}
+        className="absolute right-8 bottom-24 z-50 w-14 h-14 bg-indigo-600 text-white rounded-full shadow-lg hover:bg-indigo-700 hover:shadow-2xl transition-all transform hover:-translate-y-1 flex items-center justify-center cursor-pointer"
+        title="AI 助手"
+      >
+        <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+        </svg>
+      </button>
+    );
+  }
 
   return (
-    <div className="absolute right-6 bottom-6 w-96 h-[600px] bg-white rounded-xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden z-50">
+    <div className="absolute right-8 bottom-24 w-96 h-[600px] max-h-[80vh] bg-white rounded-xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden z-50 transition-all">
       <div className="bg-blue-600 p-4 text-white flex justify-between items-center">
         <h3 className="font-semibold flex items-center gap-2">
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -94,6 +107,11 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ isOpen, currentView, pate
           </svg>
           {currentView === AppView.NOVELTY_SEARCH ? '交底上下文助手' : 'AI 专利顾问'}
         </h3>
+        <button onClick={onToggle} className="text-white hover:text-blue-200 transition-colors">
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50">

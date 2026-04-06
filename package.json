@@ -9,14 +9,21 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@google/genai": "^1.30.0",
+    "@supabase/supabase-js": "^2.101.1",
+    "@tailwindcss/vite": "^4.2.2",
+    "docx": "^9.6.1",
+    "jspdf": "^4.2.1",
+    "katex": "0.16.44",
+    "marked": "17.0.5",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "@google/genai": "^1.30.0",
-    "marked": "17.0.5",
-    "katex": "0.16.44"
+    "tailwindcss": "^4.2.2"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
     "typescript": "~6.0.2",
     "vite": "^8.0.3"

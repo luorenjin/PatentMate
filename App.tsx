@@ -1,7 +1,9 @@
 import React, { Suspense, lazy, useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
-import { AppView, PatentData } from './types';
+import { AppView, PatentData, AuthView } from './types';
 import { savePatentToStorage, createNewPatentData } from './services/storageService';
+import { isSupabaseConfigured, getSession, onAuthStateChange, signOut as supabaseSignOut } from './services/supabaseService';
+import { getOrCreateDefaultOrganization, associatePatentsWithUser } from './services/organizationService';
 
 const ChatAssistant = lazy(() => import('./components/ChatAssistant'));
 const NoveltySearch = lazy(() => import('./components/NoveltySearch'));
@@ -9,15 +11,89 @@ const PatentDrafter = lazy(() => import('./components/PatentDrafter'));
 const Editor = lazy(() => import('./components/Editor'));
 const Dashboard = lazy(() => import('./components/Dashboard'));
 
+// Auth components
+const Login = lazy(() => import('./components/Auth/Login'));
+const Register = lazy(() => import('./components/Auth/Register'));
+const PasswordReset = lazy(() => import('./components/Auth/PasswordReset'));
+const OrganizationSettings = lazy(() => import('./components/Settings/OrganizationSettings'));
+
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.DASHBOARD);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [patentData, setPatentData] = useState<PatentData | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
 
+  // Auth state
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [authView, setAuthView] = useState<AuthView>('LOGIN');
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
+
+  const supabaseConfigured = isSupabaseConfigured();
+
+  // Check auth on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      const session = await getSession();
+      if (session?.user) {
+        setIsAuthenticated(true);
+        setCurrentUserId(session.user.id);
+
+        // Get or create default organization
+        const org = getOrCreateDefaultOrganization(session.user.id);
+        setCurrentOrgId(org.id);
+
+        // Associate existing patents with user
+        associatePatentsWithUser(session.user.id, org.id);
+      } else {
+        setIsAuthenticated(false);
+      }
+    };
+
+    checkAuth();
+
+    // Listen for auth changes
+    const unsubscribe = onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' && session?.user) {
+        setIsAuthenticated(true);
+        setCurrentUserId(session.user.id);
+
+        // Get or create default organization
+        const org = getOrCreateDefaultOrganization(session.user.id);
+        setCurrentOrgId(org.id);
+
+        // Associate existing patents with user
+        associatePatentsWithUser(session.user.id, org.id);
+      } else if (event === 'SIGNED_OUT') {
+        setIsAuthenticated(false);
+        setCurrentUserId(null);
+        setCurrentOrgId(null);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const handleLoginSuccess = () => {
+    // Auth state change listener will handle this
+  };
+
+  const handleRegisterSuccess = () => {
+    setAuthView('LOGIN');
+  };
+
+  const handleSignOut = async () => {
+    await supabaseSignOut();
+    setIsAuthenticated(false);
+    setCurrentUserId(null);
+    setCurrentOrgId(null);
+    setPatentData(null);
+    setCurrentView(AppView.DASHBOARD);
+  };
+
   const updatePatentData = (key: keyof PatentData, value: any) => {
     if (!patentData) return;
-    setPatentData(prev => prev ? ({ ...prev, [key]: value }) : null);
+    setPatentData(prev => prev ? ({ ...prev, [key]: value, userId: currentUserId || prev.userId, organizationId: currentOrgId || prev.organizationId }) : null);
   };
 
   const handleSave = () => {
@@ -29,6 +105,13 @@ const App: React.FC = () => {
 
   const handleCreateNew = () => {
       const newPatent = createNewPatentData();
+      // Associate with current user and organization
+      if (currentUserId) {
+        newPatent.userId = currentUserId;
+      }
+      if (currentOrgId) {
+        newPatent.organizationId = currentOrgId;
+      }
       setPatentData(newPatent);
       setCurrentView(AppView.NOVELTY_SEARCH);
   };
@@ -56,11 +139,10 @@ const App: React.FC = () => {
   // Handle sidebar navigation clicks
   const handleSidebarNavigation = (view: AppView) => {
       if (view === AppView.DASHBOARD) {
-          // If clicking Dashboard, we save and close the current patent
           handleBackToDashboard();
+      } else if (view === AppView.SETTINGS) {
+          setCurrentView(AppView.SETTINGS);
       } else {
-          // Only allow switching views if we have a patent, or if it's permitted
-          // The Sidebar UI should handle disabling, but this is a safety check
           if (patentData) {
               if (view === AppView.DRAFTER && patentData.status !== 'ready_to_submit') {
                 setPatentData(prev => prev ? ({ ...prev, status: 'drafting' }) : null);
@@ -84,7 +166,48 @@ const App: React.FC = () => {
       setTimeout(() => setNotification(null), 3000);
   };
 
+  // Render auth view
+  const renderAuthView = () => {
+    switch (authView) {
+      case 'REGISTER':
+        return (
+          <Register
+            onSwitchToLogin={() => setAuthView('LOGIN')}
+            onRegisterSuccess={handleRegisterSuccess}
+            isConfigured={supabaseConfigured}
+          />
+        );
+      case 'PASSWORD_RESET':
+        return (
+          <PasswordReset
+            onSwitchToLogin={() => setAuthView('LOGIN')}
+            isConfigured={supabaseConfigured}
+          />
+        );
+      default:
+        return (
+          <Login
+            onSwitchToRegister={() => setAuthView('REGISTER')}
+            onSwitchToReset={() => setAuthView('PASSWORD_RESET')}
+            onLoginSuccess={handleLoginSuccess}
+            isConfigured={supabaseConfigured}
+          />
+        );
+    }
+  };
+
+  // Render main app view
   const renderView = () => {
+    // Settings view
+    if (currentView === AppView.SETTINGS && currentOrgId) {
+      return (
+        <OrganizationSettings
+          organizationId={currentOrgId}
+          onBack={() => setCurrentView(AppView.DASHBOARD)}
+        />
+      );
+    }
+
     // If no patent loaded, force Dashboard
     if (!patentData) {
         return <Dashboard onOpenPatent={handleOpenPatent} onCreateNew={handleCreateNew} />;
@@ -93,29 +216,27 @@ const App: React.FC = () => {
     // If patent loaded, check view
     switch (currentView) {
       case AppView.DASHBOARD:
-         // Should not happen if patentData is set due to handleSidebarNavigation logic, 
-         // but if it does, show dashboard
          return <Dashboard onOpenPatent={handleOpenPatent} onCreateNew={handleCreateNew} />;
       case AppView.NOVELTY_SEARCH:
-        return <NoveltySearch 
-                  patentData={patentData} 
-                  updatePatentData={updatePatentData} 
-                  setView={setCurrentView} 
+        return <NoveltySearch
+                  patentData={patentData}
+                  updatePatentData={updatePatentData}
+                  setView={setCurrentView}
                   onSave={handleSave}
                   onBack={handleBackToDashboard}
                />;
       case AppView.DRAFTER:
-        return <PatentDrafter 
-                  patentData={patentData} 
-                  updatePatentData={updatePatentData} 
+        return <PatentDrafter
+                  patentData={patentData}
+                  updatePatentData={updatePatentData}
                   setView={setCurrentView}
                   onSave={handleSave}
                   onBack={handleBackToDashboard}
                />;
       case AppView.EDITOR:
-        return <Editor 
-                  patentData={patentData} 
-                  updatePatentData={updatePatentData} 
+        return <Editor
+                  patentData={patentData}
+                  updatePatentData={updatePatentData}
                   setView={setCurrentView}
                   onSave={handleSave}
                   onBack={handleBackToDashboard}
@@ -129,23 +250,48 @@ const App: React.FC = () => {
     <div className="p-8 text-sm text-slate-500">正在加载当前工作区...</div>
   );
 
+  // Show loading while checking auth
+  if (isAuthenticated === null) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full mx-auto mb-4"></div>
+          <p className="text-slate-500">加载中...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show auth view if not authenticated
+  if (!isAuthenticated) {
+    return (
+      <Suspense fallback={
+        <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+          <div className="animate-spin w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full"></div>
+        </div>
+      }>
+        {renderAuthView()}
+      </Suspense>
+    );
+  }
+
+  // Main app layout
   return (
     <div className="flex h-screen w-full bg-slate-50 font-sans">
-      <Sidebar 
-          currentView={currentView} 
-          setView={handleSidebarNavigation} 
-          toggleChat={() => setIsChatOpen(!isChatOpen)}
-          isChatOpen={isChatOpen}
+      <Sidebar
+          currentView={currentView}
+          setView={handleSidebarNavigation}
           hasActivePatent={!!patentData}
+          onSignOut={handleSignOut}
       />
-      
+
       <main className="flex-1 relative overflow-hidden flex flex-col">
         <div className="flex-1 overflow-y-auto p-8 scroll-smooth">
           <Suspense fallback={fallback}>
             {renderView()}
           </Suspense>
         </div>
-        
+
         {/* Notification Toast */}
         {notification && (
             <div className="absolute top-6 right-6 bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg z-50 animate-fade-in-down flex items-center gap-2">
@@ -153,9 +299,9 @@ const App: React.FC = () => {
                 {notification}
             </div>
         )}
-        
+
         <Suspense fallback={null}>
-          <ChatAssistant isOpen={isChatOpen} currentView={currentView} patentData={patentData} />
+          <ChatAssistant isOpen={isChatOpen} onToggle={() => setIsChatOpen(!isChatOpen)} currentView={currentView} patentData={patentData} />
         </Suspense>
       </main>
     </div>

@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { PatentData } from '../types';
+import React, { useEffect, useState, useMemo } from 'react';
+import { PatentData, PatentStatus } from '../types';
 import { getPatents, deletePatentFromStorage } from '../services/storageService';
 
 interface DashboardProps {
@@ -11,6 +11,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
     const [patents, setPatents] = useState<PatentData[]>([]);
     const [deleteCandidateId, setDeleteCandidateId] = useState<string | null>(null);
     const [activeFilter, setActiveFilter] = useState<'all' | 'pending_questions' | 'strategy' | 'review' | 'ready_to_draft'>('all');
+
+    // Search, filter, and sort state
+    const [searchQuery, setSearchQuery] = useState('');
+    const [statusFilter, setStatusFilter] = useState<'all' | PatentStatus>('all');
+    const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'title-asc' | 'title-desc' | 'status'>('date-desc');
 
     const getBlockers = (patent: PatentData) => {
         const blockers: string[] = [];
@@ -53,7 +58,61 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
         return true;
     };
 
-    const filteredPatents = patents.filter(matchesFilter);
+    // Search and status filter + sorting
+    const filteredAndSortedPatents = useMemo(() => {
+        let result = patents.filter(matchesFilter);
+
+        // Search filter by title
+        if (searchQuery.trim()) {
+            const query = searchQuery.toLowerCase();
+            result = result.filter(p =>
+                (p.title || '').toLowerCase().includes(query) ||
+                (p.disclosureSummary || '').toLowerCase().includes(query) ||
+                (p.technicalField || '').toLowerCase().includes(query)
+            );
+        }
+
+        // Status filter
+        if (statusFilter !== 'all') {
+            result = result.filter(p => p.status === statusFilter);
+        }
+
+        // Sort
+        result = [...result].sort((a, b) => {
+            switch (sortBy) {
+                case 'date-desc':
+                    return b.lastModified - a.lastModified;
+                case 'date-asc':
+                    return a.lastModified - b.lastModified;
+                case 'title-asc':
+                    return (a.title || '').localeCompare(b.title || '');
+                case 'title-desc':
+                    return (b.title || '').localeCompare(a.title || '');
+                case 'status':
+                    return a.status.localeCompare(b.status);
+                default:
+                    return 0;
+            }
+        });
+
+        return result;
+    }, [patents, searchQuery, statusFilter, sortBy, activeFilter]);
+
+    // Format relative time
+    const formatRelativeTime = (timestamp: number): string => {
+        const now = Date.now();
+        const diff = now - timestamp;
+        const minutes = Math.floor(diff / 60000);
+        const hours = Math.floor(diff / 3600000);
+        const days = Math.floor(diff / 86400000);
+
+        if (minutes < 1) return '刚刚';
+        if (minutes < 60) return `${minutes} 分钟前`;
+        if (hours < 24) return `${hours} 小时前`;
+        if (days === 1) return '昨天';
+        if (days < 7) return `${days} 天前`;
+        return new Date(timestamp).toLocaleDateString('zh-CN');
+    };
 
     const getStatusMeta = (status: PatentData['status']) => {
         switch (status) {
@@ -162,6 +221,51 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
                 </div>
             </section>
 
+            {/* Search, Status Filter, and Sort */}
+            <section className="mb-6 flex flex-wrap gap-3 items-center">
+                {/* Search Input */}
+                <div className="relative flex-1 min-w-[200px] max-w-md">
+                    <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="搜索专利标题..."
+                        className="w-full pl-10 pr-4 py-2 rounded-full border border-slate-200 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                    />
+                </div>
+
+                {/* Status Filter Dropdown */}
+                <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
+                    className="px-4 py-2 rounded-full border border-slate-200 text-sm font-medium bg-white text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"
+                >
+                    <option value="all">全部状态</option>
+                    <option value="disclosure_collecting">交底采集中</option>
+                    <option value="disclosure_review">待确认</option>
+                    <option value="drafting">起草中</option>
+                    <option value="editing">待审校</option>
+                    <option value="ready_to_submit">待提交</option>
+                </select>
+
+                {/* Sort Dropdown */}
+                <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                    className="px-4 py-2 rounded-full border border-slate-200 text-sm font-medium bg-white text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none"
+                >
+                    <option value="date-desc">日期 (最新)</option>
+                    <option value="date-asc">日期 (最早)</option>
+                    <option value="title-asc">标题 (A-Z)</option>
+                    <option value="title-desc">标题 (Z-A)</option>
+                    <option value="status">状态</option>
+                </select>
+            </section>
+
+            {/* Quick Filters */}
             <section className="mb-6 flex flex-wrap gap-3">
                 {[
                     { key: 'all', label: '全部项目' },
@@ -194,7 +298,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
                 </div>
 
                 {/* Patent Cards */}
-                {filteredPatents.map((patent) => {
+                {filteredAndSortedPatents.map((patent) => {
                     const statusMeta = getStatusMeta(patent.status);
                     const interviewRounds = Math.floor(patent.disclosureInterview.length / 2) || patent.disclosureInterview.length;
                     const reviewScore = patent.lastReviewScore ? `${patent.lastReviewScore} 分` : '未审查';
@@ -266,7 +370,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
                         </div>
 
                         <div className="mt-auto pt-4 border-t border-slate-100 flex justify-between items-center text-xs text-slate-400">
-                            <span>最后编辑: {new Date(patent.lastModified).toLocaleDateString()}</span>
+                            <span>最后编辑: {formatRelativeTime(patent.lastModified)}</span>
                             <span className="flex items-center gap-1 text-blue-600 font-medium group-hover:translate-x-1 transition-transform">
                                 {statusMeta.nextAction}
                                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
@@ -276,7 +380,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
                     );
                 })}
 
-                {filteredPatents.length === 0 && (
+                {filteredAndSortedPatents.length === 0 && (
                     <div className="md:col-span-2 lg:col-span-3 rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-slate-500">
                         当前筛选条件下没有项目。
                     </div>

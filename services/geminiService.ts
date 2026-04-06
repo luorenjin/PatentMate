@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import type {
   ClaimStrategyPackage,
+  DisclosureData,
   DisclosureInterviewTurn,
   NoveltyReport,
   PatentData,
@@ -967,24 +968,24 @@ export const runFinalPatentReview = async (
 ): Promise<ReviewResult> => {
   const prompt = `
       你现在是中国国家知识产权局（CNIPA）的资深审查员。请对以下专利申请书草稿进行严格的实质审查。
-      
+
       发明名称：${patentData.title}
-      
+
       权利要求书内容：
       ${patentData.claims || "（未提供）"}
-      
+
       说明书内容摘要（含具体实施方式）：
       ${patentData.abstract || ""}
       ${patentData.detailedDescription || ""}
-      
+
       审查标准：
       1. 权利要求是否清楚、完整，保护范围是否明确（CNIPA标准）。
       2. 说明书是否充分公开了发明内容，能够支撑权利要求。
       3. 是否具备明显的新颖性和创造性迹象。
       4. 语言是否符合法律文书规范。
-      
+
       请仔细找出草稿中的具体问题，并为每个问题提供修改后的建议文本（重写相关章节）。
-      
+
       请返回JSON格式结果，格式如下：
       {
         "score": number, // 0-100分。只有 > 80 分才算合格。
@@ -1015,5 +1016,283 @@ export const runFinalPatentReview = async (
   } catch (error) {
     console.error("Review failed:", error);
     return DEFAULT_REVIEW_RESULT;
+  }
+};
+
+// ============================================
+// Step 4: AI Generation Module - 5 new methods
+// ============================================
+
+/**
+ * Generate patent abstract from disclosure data
+ */
+export const generateAbstract = async (
+  disclosureData: DisclosureData,
+): Promise<string> => {
+  const answers = disclosureData.answers.reduce(
+    (acc, curr) => {
+      acc[curr.questionId] = curr.answer;
+      return acc;
+    },
+    {} as Record<string, string>,
+  );
+
+  const prompt = `
+    你是一位专业的中国专利代理师。请根据以下技术交底信息，生成专利摘要（200-300字）。
+
+    发明名称：${disclosureData.title}
+    专利类型：${disclosureData.type === "invention" ? "发明专利" : "实用新型"}
+    技术领域：${disclosureData.field}
+    技术问题/发明目的：${answers["q1"] || answers["purpose"] || ""}
+    现有技术缺陷：${answers["q2"] || answers["background"] || ""}
+    技术解决方案：${answers["q3"] || answers["solution"] || ""}
+    核心技术特征：${answers["q4"] || answers["innovation"] || ""}
+    具体实施方式：${answers["q5"] || answers["embodiment"] || ""}
+    技术效果：${answers["q6"] || answers["effect"] || ""}
+
+    要求：
+    1. 包含技术问题、解决方案、技术效果三个核心要素
+    2. 避免使用商业宣传用语，保持客观专业
+    3. 语法规范，符合国家知识产权局要求
+    4. 直接输出摘要文本，不要包含解释性文字
+  `;
+
+  try {
+    const { text } = await generateText(prompt, "fast");
+    return text || "";
+  } catch (error) {
+    console.error("generateAbstract failed:", error);
+    return "";
+  }
+};
+
+/**
+ * Generate patent claims from disclosure data
+ * Returns JSON with independent and dependent claims
+ */
+export const generateClaims = async (
+  disclosureData: DisclosureData,
+): Promise<string> => {
+  const answers = disclosureData.answers.reduce(
+    (acc, curr) => {
+      acc[curr.questionId] = curr.answer;
+      return acc;
+    },
+    {} as Record<string, string>,
+  );
+
+  const prompt = `
+    你是一位专业的中国专利代理师。请根据以下技术交底信息，生成权利要求书。
+
+    发明名称：${disclosureData.title}
+    专利类型：${disclosureData.type === "invention" ? "发明专利" : "实用新型"}
+    技术领域：${disclosureData.field}
+    技术问题/发明目的：${answers["q1"] || answers["purpose"] || ""}
+    现有技术缺陷：${answers["q2"] || answers["background"] || ""}
+    技术解决方案：${answers["q3"] || answers["solution"] || ""}
+    核心技术特征：${answers["q4"] || answers["innovation"] || ""}
+    具体实施方式：${answers["q5"] || answers["embodiment"] || ""}
+    技术效果：${answers["q6"] || answers["effect"] || ""}
+
+    要求：
+    1. 返回JSON格式，包含 independentClaims 和 dependentClaims
+    2. 独立权利要求1个，描述核心技术方案，采用"包括……其特征在于……"格式
+    3. 从属权利要求2-4个，描述优选实施方式
+    4. 权利要求清楚、得到说明书支持
+    5. 直接返回JSON，不要包含解释性文字
+
+    JSON格式：
+    {
+      "independentClaims": ["独立权利要求1"],
+      "dependentClaims": ["从属权利要求1", "从属权利要求2", "从属权利要求3"]
+    }
+  `;
+
+  try {
+    const { text } = await generateText(prompt, "pro", { jsonMode: true });
+    const jsonString = extractJsonObject(text);
+    const result = JSON.parse(jsonString) as {
+      independentClaims?: string[];
+      dependentClaims?: string[];
+    };
+
+    const independent =
+      result.independentClaims?.[0] || "权利要求生成失败";
+    const dependent = result.dependentClaims || [];
+
+    return JSON.stringify({ independentClaims: [independent], dependentClaims: dependent }, null, 2);
+  } catch (error) {
+    console.error("generateClaims failed:", error);
+    return JSON.stringify(
+      { independentClaims: ["生成失败，请重试"], dependentClaims: [] },
+      null,
+      2,
+    );
+  }
+};
+
+/**
+ * Generate patent description from disclosure data
+ * Returns description with background, purpose, solution sections
+ */
+export const generateDescription = async (
+  disclosureData: DisclosureData,
+): Promise<string> => {
+  const answers = disclosureData.answers.reduce(
+    (acc, curr) => {
+      acc[curr.questionId] = curr.answer;
+      return acc;
+    },
+    {} as Record<string, string>,
+  );
+
+  const prompt = `
+    你是一位专业的中国专利代理师。请根据以下技术交底信息，生成专利说明书的主要部分。
+
+    发明名称：${disclosureData.title}
+    专利类型：${disclosureData.type === "invention" ? "发明专利" : "实用新型"}
+    技术领域：${disclosureData.field}
+
+    ## 背景技术（现有技术及其缺陷）
+    ${answers["q2"] || answers["background"] || ""}
+
+    ## 发明目的
+    ${answers["q1"] || answers["purpose"] || ""}
+
+    ## 技术解决方案
+    ${answers["q3"] || answers["solution"] || ""}
+
+    ## 核心创新点
+    ${answers["q4"] || answers["innovation"] || ""}
+
+    ## 具体实施方式
+    ${answers["q5"] || answers["embodiment"] || ""}
+
+    ## 技术效果
+    ${answers["q6"] || answers["effect"] || ""}
+
+    要求：
+    1. 严格遵守中国《专利法》及《专利审查指南》的格式和用语规范
+    2. 语言正式、严谨、逻辑清晰
+    3. 使用Markdown格式（标题、列表等）
+    4. 输出包含以下部分：技术领域、背景技术、发明目的、技术方案、有益效果
+    5. 直接输出说明书内容，不要包含解释性文字
+  `;
+
+  try {
+    const { text } = await generateText(prompt, "pro");
+    return text || "";
+  } catch (error) {
+    console.error("generateDescription failed:", error);
+    return "生成失败，请重试。";
+  }
+};
+
+/**
+ * Generate patent embodiments from disclosure data
+ * Returns array of embodiment descriptions
+ */
+export const generateEmbodiments = async (
+  disclosureData: DisclosureData,
+): Promise<string> => {
+  const answers = disclosureData.answers.reduce(
+    (acc, curr) => {
+      acc[curr.questionId] = curr.answer;
+      return acc;
+    },
+    {} as Record<string, string>,
+  );
+
+  const prompt = `
+    你是一位专业的中国专利代理师。请根据以下技术交底信息，生成专利的具体实施方式（实施例）。
+
+    发明名称：${disclosureData.title}
+    专利类型：${disclosureData.type === "invention" ? "发明专利" : "实用新型"}
+    技术领域：${disclosureData.field}
+
+    技术解决方案：${answers["q3"] || answers["solution"] || ""}
+    核心创新点：${answers["q4"] || answers["innovation"] || ""}
+    基础实施方式：${answers["q5"] || answers["embodiment"] || ""}
+    技术效果：${answers["q6"] || answers["effect"] || ""}
+
+    要求：
+    1. 返回JSON格式，包含 embodiments 数组
+    2. 生成2-3个具体实施例，包含详细的参数、步骤、结构描述
+    3. 每个实施例应该具体、可实施，包含足够的细节使本领域技术人员能够实现
+    4. 如果有优选参数、替代方案也应该包含
+    5. 直接返回JSON，不要包含解释性文字
+
+    JSON格式：
+    {
+      "embodiments": [
+        {
+          "title": "实施例1标题",
+          "description": "实施例1的详细描述",
+          "parameters": {"参数1": "值1", "参数2": "值2"}
+        }
+      ]
+    }
+  `;
+
+  try {
+    const { text } = await generateText(prompt, "fast", { jsonMode: true });
+    const jsonString = extractJsonObject(text);
+    const result = JSON.parse(jsonString) as {
+      embodiments?: Array<{ title?: string; description?: string; parameters?: Record<string, string> }>;
+    };
+
+    if (!result.embodiments || result.embodiments.length === 0) {
+      return JSON.stringify({ embodiments: [{ title: "实施例1", description: "生成失败，请重试", parameters: {} }] }, null, 2);
+    }
+
+    return JSON.stringify({ embodiments: result.embodiments }, null, 2);
+  } catch (error) {
+    console.error("generateEmbodiments failed:", error);
+    return JSON.stringify(
+      { embodiments: [{ title: "实施例1", description: "生成失败，请重试", parameters: {} }] },
+      null,
+      2,
+    );
+  }
+};
+
+/**
+ * Generate drawings description from embodiments
+ */
+export const generateDrawingsDescription = async (
+  embodimentsJson: string,
+): Promise<string> => {
+  let embodiments: Array<{ title?: string; description?: string }> = [];
+  try {
+    const parsed = JSON.parse(embodimentsJson);
+    embodiments = parsed.embodiments || [];
+  } catch {
+    embodiments = [];
+  }
+
+  const prompt = `
+    你是一位专业的中国专利代理师。请根据以下实施例信息，生成专利的附图说明。
+
+    实施例信息：
+    ${embodiments.map((e, i) => `实施例${i + 1}: ${e.title} - ${e.description}`).join("\n")}
+
+    要求：
+    1. 描述每一幅附图的内容和要表达的技术方案
+    2. 使用"图1"、"图2"等编号
+    3. 语言简洁、专业，符合专利局格式要求
+    4. 直接输出附图说明，不要包含其他解释性文字
+
+    输出格式示例：
+    图1是本发明的整体结构示意图；
+    图2是本发明的局部放大图；
+    图3是本发明的工作流程图。
+  `;
+
+  try {
+    const { text } = await generateText(prompt, "fast");
+    return text || "";
+  } catch (error) {
+    console.error("generateDrawingsDescription failed:", error);
+    return "生成失败，请重试。";
   }
 };
