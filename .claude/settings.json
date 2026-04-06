@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit(filePath=.*\\.env.*)",
+        "hooks": [{
+          "type": "prompt",
+          "prompt": "Direct edits to .env files are blocked for security. Edit .env.local.example instead and document the required variables in CLAUDE.md."
+        }]
+      }
+    ]
+  }
+}
