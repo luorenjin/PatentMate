@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { TechnicalField } from '../../types';
 
 interface FieldSelectionProps {
   selectedField: TechnicalField | null;
-  onSelect: (field: TechnicalField) => void;
+  title: string;
+  onSelect: (field: TechnicalField, title: string) => void;
+  onBack: () => void;
 }
 
 const fieldIcons: Record<TechnicalField, React.ReactNode> = {
@@ -62,31 +64,80 @@ const fieldIcons: Record<TechnicalField, React.ReactNode> = {
 
 const fields: TechnicalField[] = ['AI', '新能源', '医疗器械', '软件', '机械', '化工', '电子', '通信', '生物', '材料'];
 
-const FieldSelection: React.FC<FieldSelectionProps> = ({ selectedField, onSelect }) => {
-  return (
-    <div className="max-w-3xl mx-auto">
-      <h2 className="text-2xl font-bold text-slate-900 mb-2">选择技术领域</h2>
-      <p className="text-slate-500 mb-8">请选择您的发明所属的技术领域</p>
+const FieldSelection: React.FC<FieldSelectionProps> = ({ selectedField, title: initialTitle, onSelect, onBack }) => {
+  const [field, setField] = useState<TechnicalField | null>(selectedField);
+  const [title, setTitle] = useState(initialTitle);
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-        {fields.map((field) => (
-          <button
-            key={field}
-            onClick={() => onSelect(field)}
-            className={`p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all duration-200 hover:shadow-md ${
-              selectedField === field
-                ? 'border-blue-500 bg-blue-50 shadow-sm'
-                : 'border-slate-200 bg-white hover:border-slate-300'
-            }`}
-          >
-            <div className={selectedField === field ? 'text-blue-600' : 'text-slate-600'}>
-              {fieldIcons[field]}
-            </div>
-            <span className={`text-sm font-medium ${selectedField === field ? 'text-blue-700' : 'text-slate-700'}`}>
-              {field}
-            </span>
-          </button>
-        ))}
+  const canProceed = field !== null && title.trim().length > 0;
+
+  return (
+    <div className="max-w-2xl mx-auto">
+      <h2 className="text-2xl font-bold text-slate-900 mb-2">基本信息</h2>
+      <p className="text-slate-500 mb-8">请填写发明名称并选择技术领域</p>
+
+      {/* Title Input */}
+      <div className="mb-8">
+        <label className="block text-sm font-semibold text-slate-700 mb-3">
+          发明名称 <span className="text-red-500">*</span>
+        </label>
+        <input
+          type="text"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="例如：一种基于深度学习的图像分割方法及装置"
+          className="w-full px-4 py-3 border border-slate-200 rounded-xl text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        />
+        <p className="mt-2 text-xs text-slate-500">
+          建议格式：一种[技术领域]的[发明对象]，例如"一种基于深度学习的图像分割方法"
+        </p>
+      </div>
+
+      {/* Technical Field Selection */}
+      <div className="mb-8">
+        <label className="block text-sm font-semibold text-slate-700 mb-3">
+          技术领域 <span className="text-red-500">*</span>
+        </label>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+          {fields.map((f) => (
+            <button
+              key={f}
+              onClick={() => setField(f)}
+              className={`p-4 rounded-xl border-2 flex flex-col items-center gap-2 transition-all duration-200 hover:shadow-md ${
+                field === f
+                  ? 'border-blue-500 bg-blue-50 shadow-sm'
+                  : 'border-slate-200 bg-white hover:border-slate-300'
+              }`}
+            >
+              <div className={field === f ? 'text-blue-600' : 'text-slate-600'}>
+                {fieldIcons[f as TechnicalField]}
+              </div>
+              <span className={`text-sm font-medium ${field === f ? 'text-blue-700' : 'text-slate-700'}`}>
+                {f}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="flex justify-between">
+        <button
+          onClick={onBack}
+          className="px-6 py-3 bg-slate-100 text-slate-700 rounded-xl font-medium hover:bg-slate-200 transition-colors"
+        >
+          返回选择
+        </button>
+        <button
+          onClick={() => onSelect(field!, title)}
+          disabled={!canProceed}
+          className={`px-8 py-3 rounded-xl font-medium transition-colors ${
+            canProceed
+              ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-200'
+              : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+          }`}
+        >
+          开始答题
+        </button>
       </div>
     </div>
   );

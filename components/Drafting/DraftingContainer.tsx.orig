@@ -1,17 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { PatentData, DraftingStage, DraftingProgress, StageData, DisclosureData, AppView } from '../../types';
+import { PatentData, DraftingStage, DraftingProgress, StageData, DisclosureData } from '../../types';
 import StageProgress from './StageProgress';
 import AbstractGenerator from './AbstractGenerator';
 import ClaimsGenerator from './ClaimsGenerator';
 import DescriptionGenerator from './DescriptionGenerator';
 import EmbodimentGenerator from './EmbodimentGenerator';
 import DrawingsGenerator from './DrawingsGenerator';
-import { renderMarkdown } from '../../services/markdownService';
 
 interface DraftingContainerProps {
   patentData: PatentData;
   updatePatentData: (field: keyof PatentData, value: any) => void;
-  setView: (view: AppView) => void;
   onSave: () => void;
   onBack: () => void;
 }
@@ -37,7 +35,6 @@ const createEmptyProgress = (): DraftingProgress => ({
 const DraftingContainer: React.FC<DraftingContainerProps> = ({
   patentData,
   updatePatentData,
-  setView,
   onSave,
   onBack,
 }) => {
@@ -218,57 +215,7 @@ const DraftingContainer: React.FC<DraftingContainerProps> = ({
             <button
               onClick={() => {
                 updatePatentData('status', 'editing');
-
-                // Map generated drafting content into patentData root properties expected by Editor
-                if (progress.abstract.content) {
-                  updatePatentData('abstract', renderMarkdown(progress.abstract.content));
-                }
-                if (progress.claims.content) {
-                  updatePatentData('claims', renderMarkdown(progress.claims.content));
-                }
-                
-                if (progress.description.content) {
-                  const desc = progress.description.content;
-                  const extractSection = (regexHeaders: string) => {
-                    const regex = new RegExp(`(?:^|\\n)#{1,4}\\s*(?:${regexHeaders})\\s*\\n([\\s\\S]*?)(?=(?:\\n#{1,4}\\s*|$))`, 'i');
-                    const match = desc.match(regex);
-                    return match ? match[1].trim() : '';
-                  };
-                  
-                  const technicalField = extractSection("技术领域");
-                  const backgroundArt = extractSection("背景技术|现有技术");
-                  const purpose = extractSection("发明目的|技术问题");
-                  const solution = extractSection("技术方案|技术解决方案");
-                  const effect = extractSection("有益效果|技术效果");
-                  
-                  let inventionContent = [
-                    purpose ? `### 发明目的\n${purpose}` : '',
-                    solution ? `### 技术方案\n${solution}` : '',
-                    effect ? `### 有益效果\n${effect}` : ''
-                  ].filter(Boolean).join('\n\n');
-                  
-                  if (!inventionContent && !technicalField && !backgroundArt) {
-                    inventionContent = desc; 
-                  } else if (!inventionContent) {
-                    const inv = extractSection("发明内容");
-                    if (inv) inventionContent = inv;
-                    else inventionContent = desc;
-                  }
-                  
-                  if (technicalField) updatePatentData('technicalField', renderMarkdown(technicalField));
-                  if (backgroundArt) updatePatentData('backgroundArt', renderMarkdown(backgroundArt));
-                  if (inventionContent) updatePatentData('inventionContent', renderMarkdown(inventionContent));
-                }
-
-                if (progress.drawings.content) {
-                  updatePatentData('descriptionOfDrawings', renderMarkdown(progress.drawings.content));
-                }
-                if (progress.embodiment.content) {
-                  updatePatentData('detailedDescription', renderMarkdown(progress.embodiment.content));
-                }
-
                 onSave();
-                setView(AppView.EDITOR);
               }}
               className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium"
             >

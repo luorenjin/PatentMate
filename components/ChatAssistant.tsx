@@ -99,7 +99,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ isOpen, onToggle, current
   }
 
   return (
-    <div className="absolute right-8 bottom-24 w-96 h-[600px] max-h-[80vh] bg-white rounded-xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden z-50 transition-all">
+    <div className="absolute right-8 bottom-24 w-96 h-150 max-h-[80vh] bg-white rounded-xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden z-50 transition-all">
       <div className="bg-blue-600 p-4 text-white flex justify-between items-center">
         <h3 className="font-semibold flex items-center gap-2">
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -8,8 +8,10 @@ import { getOrCreateDefaultOrganization, associatePatentsWithUser } from './serv
 const ChatAssistant = lazy(() => import('./components/ChatAssistant'));
 const NoveltySearch = lazy(() => import('./components/NoveltySearch'));
 const PatentDrafter = lazy(() => import('./components/PatentDrafter'));
+const DraftingContainer = lazy(() => import('./components/Drafting/DraftingContainer'));
 const Editor = lazy(() => import('./components/Editor'));
 const Dashboard = lazy(() => import('./components/Dashboard'));
+const PatentDraft = lazy(() => import('./components/PatentDraft'));
 
 // Auth components
 const Login = lazy(() => import('./components/Auth/Login'));
@@ -113,7 +115,7 @@ const App: React.FC = () => {
         newPatent.organizationId = currentOrgId;
       }
       setPatentData(newPatent);
-      setCurrentView(AppView.NOVELTY_SEARCH);
+      setCurrentView(AppView.DISCLOSURE);
   };
 
   const handleOpenPatent = (patent: PatentData) => {
@@ -217,6 +219,13 @@ const App: React.FC = () => {
     switch (currentView) {
       case AppView.DASHBOARD:
          return <Dashboard onOpenPatent={handleOpenPatent} onCreateNew={handleCreateNew} />;
+      case AppView.DISCLOSURE:
+         return <PatentDraft
+                  patentData={patentData}
+                  updatePatentData={updatePatentData}
+                  onNext={() => setCurrentView(AppView.NOVELTY_SEARCH)}
+                  onBack={() => setCurrentView(AppView.DASHBOARD)}
+                />;
       case AppView.NOVELTY_SEARCH:
         return <NoveltySearch
                   patentData={patentData}
@@ -226,7 +235,7 @@ const App: React.FC = () => {
                   onBack={handleBackToDashboard}
                />;
       case AppView.DRAFTER:
-        return <PatentDrafter
+        return <DraftingContainer
                   patentData={patentData}
                   updatePatentData={updatePatentData}
                   setView={setCurrentView}

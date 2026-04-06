@@ -237,7 +237,7 @@ const PatentDrafter: React.FC<PatentDrafterProps> = ({ patentData, updatePatentD
        </div>
 
        {/* Header */}
-       <div className="flex justify-between items-center mb-6 flex-shrink-0">
+       <div className="flex justify-between items-center mb-6 shrink-0">
           <button onClick={onBack} className="text-slate-500 hover:text-slate-800 flex items-center gap-2 font-medium">
              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
              返回工作台
@@ -310,7 +310,7 @@ const PatentDrafter: React.FC<PatentDrafterProps> = ({ patentData, updatePatentD
                     value={patentData.inventionContent}
                     onChange={(val) => updatePatentData('inventionContent', val)}
                     placeholder="本发明的具体技术方案是什么？(支持 Markdown 和 LaTeX 公式)"
-                    className="min-h-[160px]"
+                    className="min-h-40"
                 />
                 </div>
             </div>
@@ -325,7 +325,7 @@ const PatentDrafter: React.FC<PatentDrafterProps> = ({ patentData, updatePatentD
                 <textarea
                     value={patentData.claimStrategy}
                     onChange={(e) => handleUpdateClaimStrategy(e.target.value)}
-                    className="w-full min-h-[200px] rounded-xl border border-slate-700 bg-slate-900/70 px-4 py-3 text-sm leading-relaxed text-slate-100 outline-none focus:ring-2 focus:ring-cyan-400 resize-y"
+                    className="w-full min-h-50 rounded-xl border border-slate-700 bg-slate-900/70 px-4 py-3 text-sm leading-relaxed text-slate-100 outline-none focus:ring-2 focus:ring-cyan-400 resize-y"
                     placeholder="在这里确认独立权利要求的必要技术特征、从属层级和保护边界。"
                 />
                 <div className="mt-4">
@@ -333,7 +333,7 @@ const PatentDrafter: React.FC<PatentDrafterProps> = ({ patentData, updatePatentD
                     <textarea
                         value={strategyRisksText}
                         onChange={(e) => handleUpdateStrategyRisks(e.target.value)}
-                        className="w-full min-h-[120px] rounded-xl border border-slate-700 bg-slate-900/70 px-4 py-3 text-sm leading-relaxed text-slate-200 outline-none focus:ring-2 focus:ring-cyan-400 resize-y"
+                        className="w-full min-h-30 rounded-xl border border-slate-700 bg-slate-900/70 px-4 py-3 text-sm leading-relaxed text-slate-200 outline-none focus:ring-2 focus:ring-cyan-400 resize-y"
                         placeholder="每行一条，记录保护边界不清、技术效果不足、实施例不够等风险。"
                     />
                 </div>
@@ -396,7 +396,7 @@ const PatentDrafter: React.FC<PatentDrafterProps> = ({ patentData, updatePatentD
                     className={`px-4 py-2 rounded-lg font-semibold shadow-md transition-all flex items-center gap-2 ${
                         isBatchProcessing || isGenerating || !patentData.claimStrategyConfirmed
                         ? 'bg-slate-300 text-slate-500 cursor-not-allowed' 
-                        : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 transform hover:-translate-y-0.5'
+                        : 'bg-linear-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 transform hover:-translate-y-0.5'
                     }`}
                 >
                     {isBatchProcessing ? (
@@ -499,7 +499,7 @@ const PatentDrafter: React.FC<PatentDrafterProps> = ({ patentData, updatePatentD
                             {(patentData.drawings && patentData.drawings.length > 0) ? (
                                 <div className="grid grid-cols-3 gap-4">
                                     {patentData.drawings.map((img, idx) => (
-                                        <div key={idx} className="relative group rounded-lg overflow-hidden border border-slate-300 bg-white aspect-[4/3]">
+                                        <div key={idx} className="relative group rounded-lg overflow-hidden border border-slate-300 bg-white aspect-4/3">
                                             <img 
                                                 src={`data:image/jpeg;base64,${img}`} 
                                                 alt={`Fig ${idx + 1}`} 
@@ -531,7 +531,7 @@ const PatentDrafter: React.FC<PatentDrafterProps> = ({ patentData, updatePatentD
                     value={(patentData[section.key] as string) || ''}
                     onChange={(newHtml) => updatePatentData(section.key, newHtml)}
                     placeholder={`在此处撰写或生成${section.label}... (支持 Markdown 和 LaTeX 公式)`}
-                    className="min-h-[250px]"
+                    className="min-h-62.5"
                 />
                 </div>
             </div>
