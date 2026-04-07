@@ -144,7 +144,7 @@ PatentMate/
 │   ├── Auth/                # 登录 / 注册 / 密码重置
 │   └── Settings/            # 组织设置
 └── services/
-    ├── geminiService.ts     # AI 接口封装（双提供商）
+    ├── aiService.ts         # AI 接口封装（双提供商）
     ├── storageService.ts    # localStorage CRUD
     ├── markdownService.ts   # Markdown + LaTeX 渲染
     ├── supabaseService.ts   # Supabase 认证封装

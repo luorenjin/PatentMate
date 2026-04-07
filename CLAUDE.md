@@ -50,7 +50,7 @@ Dashboard (工作台)
   RichTextEditor.tsx   - Markdown + LaTeX editor
 
 /services/
-  geminiService.ts     - All AI functions (dual-provider: Gemini/Qwen)
+  aiService.ts         - All AI functions (dual-provider: Gemini/Qwen)
   storageService.ts    - localStorage CRUD operations
   markdownService.ts   - Markdown + LaTeX → HTML rendering
 
@@ -97,7 +97,7 @@ const handleAIAction = async () => {
   setError(null);
   setIsLoading(true);
   try {
-    const text = await geminiService.someFunc(params);
+    const text = await aiService.someFunc(params);
     const html = renderMarkdown(text);      // Markdown → HTML
     updatePatentData('fieldName', html);
   } catch (err) {
@@ -133,7 +133,7 @@ QWEN_MODEL_FAST=qwen3.5-flash
 QWEN_MODEL_PRO=qwen3.6-plus
 ```
 
-Model versions are defined in `services/geminiService.ts`:
+Model versions are defined in `services/aiService.ts`:
 
 - Fast model: `gemini-3.0-flash` / `qwen3.5-flash`
 - Pro model: `gemini-3.1-pro` / `qwen3.6-plus`

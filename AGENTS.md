@@ -61,7 +61,7 @@ interface FooProps {
 const handleAIAction = async () => {
   setIsLoading(true);
   try {
-    const text = await geminiService.someFunc(params);
+    const text = await aiService.someFunc(params);
     const html = renderMarkdown(text);
     updatePatentData('fieldName', html);
   } catch (err) {

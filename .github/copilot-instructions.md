@@ -59,7 +59,7 @@ Dashboard（工作台）
   RichTextEditor.tsx   富文本编辑器（Markdown + LaTeX）
 
 /services/
-  geminiService.ts     Gemini API 封装（10 个导出函数）
+  aiService.ts         AI 服务封装（双提供商，多个导出函数）
   storageService.ts    localStorage CRUD（4 个函数）
   markdownService.ts   Markdown + LaTeX → HTML 渲染
 
@@ -102,7 +102,7 @@ const handleAIAction = async () => {
   setError(null);
   setIsLoading(true);
   try {
-    const text = await geminiService.someFunc(params);
+    const text = await aiService.someFunc(params);
     const html = renderMarkdown(text);     // AI 返回 Markdown → 渲染为 HTML
     updatePatentData('fieldName', html);
   } catch (err) {
@@ -169,7 +169,7 @@ interface PatentData {
 - JSON 解析使用 `responseText.match(/\{[\s\S]*\}/)` 提取，需包裹 try/catch 防止 AI 格式不符导致崩溃
 
 ### 模型版本
-- 当前使用 `gemini-2.5-flash`（新颖性检索）和 `gemini-2.5-pro`（撰写/润色），均在 `geminiService.ts` 顶部常量定义；如需更换，只改该文件
+- 当前使用 `gemini-2.5-flash`（新颖性检索）和 `gemini-2.5-pro`（撰写/润色），均在 `aiService.ts` 顶部常量定义；如需更换，只改该文件
 
 ### 依赖 CDN
 - Tailwind CSS、KaTeX、部分包从 CDN 加载，**离线环境无法正常使用**

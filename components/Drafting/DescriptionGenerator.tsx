@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { DisclosureData, StageData } from '../../types';
-import { generateDescription } from '../../services/geminiService';
+import { generateDescription } from '../../services/aiService';
 import { renderMarkdown } from '../../services/markdownService';
 
 interface DescriptionGeneratorProps {

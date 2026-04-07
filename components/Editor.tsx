@@ -1,7 +1,7 @@
 
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { AppView, PatentData, ReviewResult, ReviewIssue } from '../types';
-import { refineText, regenerateClaimStrategyFromReview, runFinalPatentReview } from '../services/geminiService';
+import { refineText, regenerateClaimStrategyFromReview, runFinalPatentReview } from '../services/aiService';
 import { renderMarkdown } from '../services/markdownService';
 import { RichTextEditor } from './RichTextEditor';
 import { exportToDocx, exportToPdf, downloadBlob } from '../services/exportService';

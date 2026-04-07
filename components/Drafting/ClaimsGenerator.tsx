@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { DisclosureData, StageData } from '../../types';
-import { generateClaims } from '../../services/geminiService';
+import { generateClaims } from '../../services/aiService';
 
 interface ClaimsGeneratorProps {
   disclosureData: DisclosureData;

@@ -8,7 +8,7 @@ import {
   performNoveltySearch,
   runDisclosureInterviewTurn,
   summarizeTechnicalDisclosure,
-} from '../services/geminiService';
+} from '../services/aiService';
 import { RichTextEditor } from './RichTextEditor';
 import { AppView, DisclosureInterviewTurn, NoveltyReport, PatentData } from '../types';
 import { renderMarkdown } from '../services/markdownService';

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { DisclosureData, StageData } from '../../types';
-import { generateEmbodiments } from '../../services/geminiService';
+import { generateEmbodiments } from '../../services/aiService';
 
 interface EmbodimentGeneratorProps {
   disclosureData: DisclosureData;

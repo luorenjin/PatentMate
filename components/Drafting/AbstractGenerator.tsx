@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { DisclosureData, StageData } from '../../types';
-import { generateAbstract } from '../../services/geminiService';
+import { generateAbstract } from '../../services/aiService';
 import { renderMarkdown } from '../../services/markdownService';
 
 interface AbstractGeneratorProps {

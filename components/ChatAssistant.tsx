@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AppView, ChatMessage, PatentData } from '../types';
-import { ChatSession, createChatSession } from '../services/geminiService';
+import { ChatSession, createChatSession } from '../services/aiService';
 
 interface ChatAssistantProps {
   isOpen: boolean;

@@ -45,19 +45,22 @@ export default defineConfig(({ mode }) => {
           "https://dashscope.aliyuncs.com/compatible-mode/v1",
       ),
       "process.env.GEMINI_MODEL_FAST": JSON.stringify(
-        env.GEMINI_MODEL_FAST || "gemini-2.5-flash",
+        env.GEMINI_MODEL_FAST || "gemini-3.0-flash",
       ),
       "process.env.GEMINI_MODEL_PRO": JSON.stringify(
-        env.GEMINI_MODEL_PRO || "gemini-2.5-pro",
+        env.GEMINI_MODEL_PRO || "gemini-3.1-pro",
       ),
       "process.env.GEMINI_MODEL_IMAGE": JSON.stringify(
         env.GEMINI_MODEL_IMAGE || "imagen-4.0-generate-001",
       ),
       "process.env.QWEN_MODEL_FAST": JSON.stringify(
-        env.QWEN_MODEL_FAST || "qwen-plus",
+        env.QWEN_MODEL_FAST || "qwen3.5-flash",
       ),
       "process.env.QWEN_MODEL_PRO": JSON.stringify(
-        env.QWEN_MODEL_PRO || "qwen-max",
+        env.QWEN_MODEL_PRO || "qwen3.6-plus",
+      ),
+      "process.env.QWEN_MODEL_IMAGE": JSON.stringify(
+        env.QWEN_MODEL_IMAGE || "qwen-image-2.0",
       ),
     },
     resolve: {

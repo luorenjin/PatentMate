@@ -135,7 +135,7 @@ const handleBack = () => {
 ### Internal
 
 - `types.ts` - PatentData, AppView types
-- `services/geminiService.ts` - AI functions
+- `services/aiService.ts` - AI functions
 - `services/markdownService.ts` - renderMarkdown
 - `services/storageService.ts` - localStorage operations
 

@@ -1,7 +1,7 @@
 
 import React, { useState, useRef } from 'react';
 import { AppView, PatentData } from '../types';
-import { generateClaimStrategyPackage, generatePatentSection, generatePatentDrawing, refineText } from '../services/geminiService';
+import { generateClaimStrategyPackage, generatePatentSection, generatePatentDrawing, refineText } from '../services/aiService';
 import { renderMarkdown } from '../services/markdownService';
 import { RichTextEditor } from './RichTextEditor';
 

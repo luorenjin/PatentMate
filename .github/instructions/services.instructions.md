@@ -4,7 +4,7 @@ applyTo: services/**
 
 # services/ 代码规范
 
-适用于 `services/geminiService.ts`、`services/storageService.ts`、`services/markdownService.ts` 及未来所有服务文件。
+适用于 `services/aiService.ts`、`services/storageService.ts`、`services/markdownService.ts` 及未来所有服务文件。
 
 ---
 
@@ -42,7 +42,7 @@ model: 'gemini-3-pro-preview'
 
 ## 错误处理规范
 
-### AI 服务函数（`geminiService.ts`）
+### AI 服务函数（`aiService.ts`）
 
 - **所有** async 函数必须有 `try/catch`，包括 `createChatSession()`
 - `catch` 块必须 `console.error()`，然后**返回合理的 fallback 值**，禁止 `throw`（避免调用方需要二次 try/catch）

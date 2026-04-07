@@ -27,6 +27,8 @@ const MODEL_GEMINI_IMAGE =
 
 const MODEL_QWEN_FAST = process.env.QWEN_MODEL_FAST || "qwen-plus";
 const MODEL_QWEN_PRO = process.env.QWEN_MODEL_PRO || "qwen-max";
+const MODEL_QWEN_IMAGE =
+  process.env.QWEN_MODEL_IMAGE || "wanx2.1-t2i-turbo";
 
 const DEFAULT_REVIEW_RESULT: ReviewResult = {
   score: 0,
@@ -810,6 +812,109 @@ export const generatePatentSection = async (
 };
 
 /**
+ * Generates a patent drawing via DashScope Wanx (Qwen provider).
+ * Uses async task polling: submit → poll → fetch image → base64.
+ */
+const generatePatentDrawingQwen = async (prompt: string): Promise<string> => {
+  if (!QWEN_API_KEY) {
+    console.error("Qwen API key is missing for image generation.");
+    return "";
+  }
+
+  const DASHSCOPE_IMAGE_URL =
+    "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis";
+  const DASHSCOPE_TASK_URL =
+    "https://dashscope.aliyuncs.com/api/v1/tasks/";
+
+  // 1. Submit task
+  let taskId: string;
+  try {
+    const submitRes = await fetch(DASHSCOPE_IMAGE_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${QWEN_API_KEY}`,
+        "Content-Type": "application/json",
+        "X-DashScope-Async": "enable",
+      },
+      body: JSON.stringify({
+        model: MODEL_QWEN_IMAGE,
+        input: { prompt },
+        parameters: { size: "1024*768", n: 1 },
+      }),
+    });
+    if (!submitRes.ok) {
+      console.error("Qwen image task submission failed:", await submitRes.text());
+      return "";
+    }
+    const submitData = await submitRes.json() as {
+      output?: { task_id?: string };
+    };
+    taskId = submitData.output?.task_id ?? "";
+    if (!taskId) {
+      console.error("Qwen image task submission returned no task_id.");
+      return "";
+    }
+  } catch (error) {
+    console.error("Qwen image task submission error:", error);
+    return "";
+  }
+
+  // 2. Poll until SUCCEEDED or FAILED (max 60s, interval 3s)
+  const MAX_POLLS = 20;
+  let imageUrl = "";
+  for (let i = 0; i < MAX_POLLS; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    try {
+      const pollRes = await fetch(`${DASHSCOPE_TASK_URL}${taskId}`, {
+        headers: { "Authorization": `Bearer ${QWEN_API_KEY}` },
+      });
+      if (!pollRes.ok) continue;
+      const pollData = await pollRes.json() as {
+        output?: {
+          task_status?: string;
+          results?: Array<{ url?: string }>;
+        };
+      };
+      const status = pollData.output?.task_status;
+      if (status === "SUCCEEDED") {
+        imageUrl = pollData.output?.results?.[0]?.url ?? "";
+        break;
+      }
+      if (status === "FAILED") {
+        console.error("Qwen image task failed.");
+        return "";
+      }
+    } catch (error) {
+      console.error("Qwen image task poll error:", error);
+    }
+  }
+
+  if (!imageUrl) {
+    console.error("Qwen image generation timed out or returned no URL.");
+    return "";
+  }
+
+  // 3. Fetch image and convert to base64
+  try {
+    const imgRes = await fetch(imageUrl);
+    if (!imgRes.ok) {
+      console.error("Failed to fetch generated image from URL.");
+      return "";
+    }
+    const arrayBuffer = await imgRes.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = "";
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  } catch (error) {
+    console.error("Failed to convert Qwen image to base64:", error);
+    return "";
+  }
+};
+
+/**
  * Generates a schematic drawing for the patent using Imagen.
  */
 export const generatePatentDrawing = async (
@@ -830,10 +935,7 @@ export const generatePatentDrawing = async (
 
   try {
     if (!useGemini()) {
-      console.error(
-        "Qwen provider does not support image generation in current implementation.",
-      );
-      return "";
+      return generatePatentDrawingQwen(prompt);
     }
 
     if (!geminiClient) {

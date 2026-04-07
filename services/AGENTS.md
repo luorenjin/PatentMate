@@ -11,7 +11,7 @@ Business logic services for AI interactions, localStorage persistence, and Markd
 
 | File | Description |
 | ------ | ------------- |
-| `geminiService.ts` | Dual-provider AI service (Gemini/Qwen) for all patent-related AI operations |
+| `aiService.ts` | Dual-provider AI service (Gemini/Qwen) for all patent-related AI operations |
 | `storageService.ts` | localStorage CRUD operations for patent drafts |
 | `markdownService.ts` | Markdown + KaTeX LaTeX to HTML rendering |
 
@@ -38,7 +38,7 @@ try {
 
 ## Service Details
 
-### geminiService.ts
+### aiService.ts
 
 Core AI service with dual-provider support (Gemini/Qwen). Key functions:
 

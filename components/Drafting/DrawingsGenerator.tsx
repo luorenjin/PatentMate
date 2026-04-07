@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { StageData } from '../../types';
-import { generateDrawingsDescription } from '../../services/geminiService';
+import { generateDrawingsDescription } from '../../services/aiService';
 import { renderMarkdown } from '../../services/markdownService';
 
 interface DrawingsGeneratorProps {
