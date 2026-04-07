@@ -188,7 +188,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange,
         if (onClick) onClick();
         else if (cmd) exec(cmd, arg);
       }}
-      className={`p-1.5 rounded hover:bg-slate-200 text-slate-700 text-xs font-bold min-w-[28px] flex items-center justify-center transition-colors ${active ? 'bg-blue-100 text-blue-700' : ''}`}
+      className={`p-1.5 rounded hover:bg-slate-200 text-slate-700 text-xs font-bold min-w-7 flex items-center justify-center transition-colors ${active ? 'bg-blue-100 text-blue-700' : ''}`}
       title={title}
       disabled={mode === 'source' && !onClick} // Disable formatting buttons in source mode except specific ones
     >
@@ -243,7 +243,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange,
 
       {mode === 'rich' ? (
         format === 'markdown' ? (
-          <div className="flex-1 p-4 overflow-y-auto prose prose-sm prose-slate max-w-none min-h-[200px] bg-white">
+          <div className="flex-1 p-4 overflow-y-auto prose prose-sm prose-slate max-w-none min-h-50 bg-white">
             {sourceContent ? (
               <div dangerouslySetInnerHTML={{ __html: renderMarkdown(sourceContent) }} />
             ) : (
@@ -255,7 +255,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange,
             ref={editorRef}
             contentEditable
             onInput={handleInput}
-            className="flex-1 p-4 outline-none overflow-y-auto prose prose-sm prose-slate max-w-none min-h-[200px] empty:before:content-[attr(data-placeholder)] empty:before:text-slate-400"
+            className="flex-1 p-4 outline-none overflow-y-auto prose prose-sm prose-slate max-w-none min-h-50 empty:before:content-[attr(data-placeholder)] empty:before:text-slate-400"
             data-placeholder={placeholder}
             dangerouslySetInnerHTML={{ __html: sourceContent }}
             suppressContentEditableWarning
@@ -266,7 +266,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange,
             ref={sourceRef}
             value={sourceContent}
             onChange={handleSourceChange}
-            className={`flex-1 p-4 outline-none overflow-y-auto font-mono text-xs min-h-[200px] resize-none ${format === 'markdown' ? 'bg-white text-slate-800' : 'bg-slate-800 text-slate-200'}`}
+            className={`flex-1 p-4 outline-none overflow-y-auto font-mono text-xs min-h-50 resize-none ${format === 'markdown' ? 'bg-white text-slate-800' : 'bg-slate-800 text-slate-200'}`}
             placeholder={format === 'markdown' ? '在此处输入 Markdown 内容...' : '在此处编辑 HTML 源代码...'}
           />
       )}

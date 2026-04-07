@@ -248,7 +248,7 @@ const DraftingContainer: React.FC<DraftingContainerProps> = ({
 
       <section className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
         {/* Dark gradient header */}
-        <div className="px-8 py-7 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 text-white">
+        <div className="px-8 py-7 bg-linear-to-r from-slate-950 via-slate-900 to-indigo-950 text-white">
           <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6">
             <div>
               <div className="text-indigo-300 text-sm font-semibold tracking-[0.2em] uppercase mb-3">AI Drafting</div>
@@ -257,14 +257,14 @@ const DraftingContainer: React.FC<DraftingContainerProps> = ({
                 基于已完成的技术交底，逐步生成专利申请文件各个部分，每个阶段确认后方可推进至下一阶段。
               </p>
             </div>
-            <div className="min-w-[240px] bg-white/10 border border-white/10 rounded-2xl p-5 backdrop-blur-sm">
+            <div className="min-w-60 bg-white/10 border border-white/10 rounded-2xl p-5 backdrop-blur-sm">
               <div className="flex items-center justify-between text-sm text-slate-200 mb-2">
                 <span>当前阶段</span>
                 <span className="text-xl font-bold text-white">{currentIndex + 1} / {stages.length}</span>
               </div>
               <div className="h-3 bg-white/10 rounded-full overflow-hidden mb-3">
                 <div
-                  className="h-full bg-gradient-to-r from-indigo-300 via-violet-300 to-cyan-300 rounded-full transition-all"
+                  className="h-full bg-linear-to-r from-indigo-300 via-violet-300 to-cyan-300 rounded-full transition-all"
                   style={{ width: `${Math.max(8, ((confirmedStages.length) / stages.length) * 100)}%` }}
                 />
               </div>

@@ -1,7 +1,7 @@
 
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { AppView, PatentData, ReviewResult, ReviewIssue } from '../types';
-import { refineText, regenerateClaimStrategyFromReview, runFinalPatentReview, generateMermaidDiagrams } from '../services/aiService';
+import { refineText, regenerateClaimStrategyFromReview, runFinalPatentReview, generateMermaidDiagrams, type RefineTextOptions } from '../services/aiService';
 import MermaidRenderer from './MermaidRenderer';
 import { renderMarkdown } from '../services/markdownService';
 import { RichTextEditor } from './RichTextEditor';
@@ -55,6 +55,22 @@ const htmlToPlainText = (html?: string): string => {
     const tmp = document.createElement('DIV');
     tmp.innerHTML = processed;
     return (tmp.textContent || tmp.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+};
+
+type RefinableSection = NonNullable<RefineTextOptions['section']>;
+
+const REFINABLE_SECTIONS: RefinableSection[] = [
+    'abstract',
+    'claims',
+    'technicalField',
+    'backgroundArt',
+    'inventionContent',
+    'descriptionOfDrawings',
+    'detailedDescription',
+];
+
+const isRefinableSection = (section: keyof PatentData): section is RefinableSection => {
+    return REFINABLE_SECTIONS.includes(section as RefinableSection);
 };
 
 // Helper to auto-number paragraphs for Description sections [0001], [0002]...
@@ -144,6 +160,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
   // Mermaid diagram generation state
   const [isGeneratingDiagrams, setIsGeneratingDiagrams] = useState(false);
   const [zoomedDiagramIdx, setZoomedDiagramIdx] = useState<number | null>(null);
+    const editorContainerRef = useRef<HTMLDivElement>(null);
   // Cache raw SVG strings from successfully rendered list items, keyed by diagram index.
   // The zoom modal reuses these directly instead of calling mermaid.render() again,
   // which avoids React StrictMode double-effect / ID-collision issues.
@@ -159,6 +176,41 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
             const timeoutId = window.setTimeout(() => setWriteBackNotice(null), 3000);
             return () => window.clearTimeout(timeoutId);
     }, [writeBackNotice]);
+
+  const buildRefineOptions = (
+      section: keyof PatentData,
+      operationScope: 'section' | 'selection',
+  ): RefineTextOptions => ({
+      section: isRefinableSection(section) ? section : undefined,
+      title: patentData.title,
+      patentType: patentData.patentType,
+      operationScope,
+      technicalField: htmlToPlainText(patentData.technicalField),
+      technicalProblem: patentData.technicalProblem,
+      backgroundArt: htmlToPlainText(patentData.backgroundArt),
+      inventionContent: htmlToPlainText(patentData.inventionContent),
+      descriptionOfDrawings: htmlToPlainText(patentData.descriptionOfDrawings),
+      claimStrategy: patentData.claimStrategy,
+  });
+
+  const isSelectionInsideEditor = (selection: Selection) => {
+      if (!editorContainerRef.current || selection.rangeCount === 0) {
+          return false;
+      }
+
+      return editorContainerRef.current.contains(selection.getRangeAt(0).commonAncestorContainer);
+  };
+
+  const renderInlineReplacementHtml = (markdownText: string) => {
+      const container = document.createElement('DIV');
+      container.innerHTML = renderMarkdown(markdownText);
+
+      if (container.childElementCount === 1 && container.firstElementChild?.tagName === 'P') {
+          return container.firstElementChild.innerHTML;
+      }
+
+      return container.innerHTML;
+  };
 
   const appendTextBlock = (current: string, title: string, content: string) => {
       const block = `${title}\n- ${content}`;
@@ -321,7 +373,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
 
   const handleTextSelection = () => {
       const selection = window.getSelection();
-      if (selection && selection.toString().trim().length > 10) {
+      if (selection && selection.toString().trim().length > 10 && isSelectionInsideEditor(selection)) {
           const range = selection.getRangeAt(0);
           const rect = range.getBoundingClientRect();
           setPolishPosition({ x: rect.left + rect.width / 2, y: rect.top - 40 });
@@ -333,18 +385,33 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
 
   const handlePolishSelection = async () => {
       const selection = window.getSelection();
-      if (!selection || selection.toString().trim().length < 10) return;
+      if (!selection || selection.toString().trim().length < 10 || !isSelectionInsideEditor(selection)) return;
+
+      const editorSurface = editorContainerRef.current?.querySelector('[contenteditable="true"]') as HTMLDivElement | null;
+      if (!editorSurface) return;
 
       const selectedText = selection.toString().trim();
       setIsPolishing(true);
       try {
-          const polished = await refineText(selectedText, 'polish');
-          // Replace selected text with polished version
+          const polished = await refineText(selectedText, 'polish', buildRefineOptions(selectedSection, 'selection'));
+          const polishedHtml = renderInlineReplacementHtml(polished);
           const range = selection.getRangeAt(0);
           range.deleteContents();
-          range.insertNode(document.createTextNode(polished));
+          const fragment = range.createContextualFragment(polishedHtml);
+          const lastNode = fragment.lastChild;
+          range.insertNode(fragment);
+
+          if (lastNode) {
+              range.setStartAfter(lastNode);
+              range.collapse(true);
+              selection.removeAllRanges();
+              selection.addRange(range);
+          } else {
+              selection.removeAllRanges();
+          }
+
+          updatePatentData(selectedSection, editorSurface.innerHTML);
           setShowPolishToolbar(false);
-          selection.removeAllRanges();
       } catch (err) {
           console.error('Polish failed:', err);
       } finally {
@@ -414,10 +481,14 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
 
     // Use htmlToPlainText so AI receives clean numbered text (claims: "1. … 2. …")
     const plainText = htmlToPlainText(currentContent);
+        if (!plainText.trim()) {
+            alert(`当前${getSectionLabel(selectedSection)}为空，无法执行 AI 处理。`);
+            return;
+        }
 
     setProcessingType(type);
     try {
-      const newText = await refineText(plainText, type);
+            const newText = await refineText(plainText, type, buildRefineOptions(selectedSection, 'section'));
       // 2. Convert result (likely Markdown) to HTML
       const newHtml = renderMarkdown(newText);
       updatePatentData(selectedSection, newHtml);
@@ -749,6 +820,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
        {/* Floating Polish Toolbar */}
        {showPolishToolbar && (
            <div
+               onMouseDown={(event) => event.stopPropagation()}
                className="fixed z-50 bg-white border border-blue-200 rounded-lg shadow-xl px-3 py-2 flex items-center gap-2 animate-fade-in"
                style={{ left: polishPosition.x, top: polishPosition.y, transform: 'translateX(-50%)' }}
            >
@@ -866,7 +938,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                     </svg>
-                    语言润色
+                    {processingType === 'polish' ? '语言润色中...' : '语言润色'}
                     </button>
 
                     <button
@@ -877,7 +949,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
                     </svg>
-                    智能扩充
+                    {processingType === 'expand' ? '智能扩充中...' : '智能扩充'}
                     </button>
 
                     <button
@@ -888,7 +960,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 0v10m0-10a2 2 0 012 2h2a2 2 0 002-2V7" />
                     </svg>
-                    {isGeneratingDiagrams ? 'AI 生成示意图...' : '生成 Mermaid 示意图'}
+                    {isGeneratingDiagrams ? 'AI 生成示意图...' : '生成示意图'}
                     </button>
 
                     <button
@@ -899,8 +971,15 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
                     </svg>
-                    法言法语
+                    {processingType === 'fix_legal' ? '法言法语处理中...' : '法言法语'}
                     </button>
+
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs leading-5 text-slate-500">
+                        <p>当前章节：<span className="font-semibold text-slate-700">{getSectionLabel(selectedSection)}</span></p>
+                        <p>语言润色：保留技术事实和结构，只优化行文与术语。</p>
+                        <p>智能扩充：结合现有交底补足披露细节，不虚构数据。</p>
+                        <p>法言法语：改写为更符合中国专利申请习惯的正式表述。</p>
+                    </div>
                 </div>
             </div>
 
@@ -1174,7 +1253,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
         </div>
 
         {/* Right: Rich Text Editor Area */}
-        <div className="flex-1 min-w-0 min-h-0 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col rich-text-editor-container">
+                <div ref={editorContainerRef} className="flex-1 min-w-0 min-h-0 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col rich-text-editor-container">
           <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
             <h3 className="font-bold text-slate-700">
               编辑内容: <span className="text-blue-600">{getSectionLabel(selectedSection)}</span>
@@ -1190,6 +1269,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                 value={(patentData[selectedSection] as string) || ''}
                 onChange={(newHtml) => updatePatentData(selectedSection, newHtml)}
                 format="html"
+                editorId="patent-editor-main"
                 className="flex-1 border-0 rounded-none h-full"
                 placeholder="在此处编辑..."
             />
@@ -1200,7 +1280,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
       {/* MERMAID ZOOM MODAL */}
       {zoomedDiagramIdx !== null && patentData.mermaidDiagrams && patentData.mermaidDiagrams[zoomedDiagramIdx] && (
           <div
-              className="fixed inset-0 z-[200] bg-black/75 backdrop-blur-sm flex items-center justify-center p-6"
+              className="fixed inset-0 z-200 bg-black/75 backdrop-blur-sm flex items-center justify-center p-6"
               onClick={() => setZoomedDiagramIdx(null)}
           >
               <div

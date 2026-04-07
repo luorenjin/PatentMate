@@ -27,8 +27,7 @@ const MODEL_GEMINI_IMAGE =
 
 const MODEL_QWEN_FAST = process.env.QWEN_MODEL_FAST || "qwen-plus";
 const MODEL_QWEN_PRO = process.env.QWEN_MODEL_PRO || "qwen-max";
-const MODEL_QWEN_IMAGE =
-  process.env.QWEN_MODEL_IMAGE || "wanx2.1-t2i-turbo";
+const MODEL_QWEN_IMAGE = process.env.QWEN_MODEL_IMAGE || "wanx2.1-t2i-turbo";
 
 const DEFAULT_REVIEW_RESULT: ReviewResult = {
   score: 0,
@@ -79,6 +78,58 @@ interface DisclosureInterviewResult {
   pendingQuestions: string[];
   risks: string[];
 }
+
+export type RefineTextAction = "expand" | "polish" | "fix_legal";
+
+export type RefineTextSection = Extract<
+  keyof PatentData,
+  | "abstract"
+  | "claims"
+  | "technicalField"
+  | "backgroundArt"
+  | "inventionContent"
+  | "descriptionOfDrawings"
+  | "detailedDescription"
+>;
+
+export interface RefineTextOptions {
+  section?: RefineTextSection;
+  title?: string;
+  patentType?: PatentData["patentType"];
+  operationScope?: "section" | "selection";
+  technicalField?: string;
+  technicalProblem?: string;
+  backgroundArt?: string;
+  inventionContent?: string;
+  descriptionOfDrawings?: string;
+  claimStrategy?: string;
+}
+
+const REFINE_ACTION_LABELS: Record<RefineTextAction, string> = {
+  expand: "智能扩充",
+  polish: "语言润色",
+  fix_legal: "法言法语",
+};
+
+const REFINE_SECTION_LABELS: Record<RefineTextSection, string> = {
+  abstract: "摘要",
+  claims: "权利要求书",
+  technicalField: "技术领域",
+  backgroundArt: "背景技术",
+  inventionContent: "发明内容",
+  descriptionOfDrawings: "附图说明",
+  detailedDescription: "具体实施方式",
+};
+
+const REFINE_TEXT_SYSTEM_INSTRUCTION = `
+  你是一位资深中国专利代理师，熟悉 CNIPA 审查口径、说明书充分公开要求、权利要求撰写规范以及常见驳回风险。
+  你只改写用户提供的专利文本，不输出解释、不做寒暄、不写代码块。
+  你必须严格遵守以下原则：
+  1. 保留原文已披露的技术事实、编号、公式、图号、层级结构和技术逻辑。
+  2. 不编造实验数据、性能提升比例、绝对化效果、实施例编号或不存在的附图。
+  3. “语言润色”只优化表达和逻辑，不改变技术边界；“智能扩充”只在已有披露基础上补足细节；“法言法语”要改成专利申请文体，但不能硬造新方案。
+  4. 避免口语化、宣传性和绝对化措辞，如“最佳”“完美”“完全解决”“显著优于一切现有技术”。
+`;
 
 const useGemini = (): boolean => AI_PROVIDER !== PROVIDER_QWEN;
 
@@ -232,6 +283,135 @@ const generateText = async (
   }
 };
 
+const truncateForPrompt = (value: string, maxLength: number = 1200): string => {
+  const normalized = value.trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength)}\n……（以下内容已截断，共省略 ${normalized.length - maxLength} 个字符）`;
+};
+
+const getPatentTypeLabel = (patentType?: PatentData["patentType"]): string => {
+  return patentType === "utility" ? "实用新型专利" : "发明专利";
+};
+
+const getRefineActionRules = (
+  action: RefineTextAction,
+  options?: RefineTextOptions,
+): string[] => {
+  const scopeLabel =
+    options?.operationScope === "selection" ? "所选片段" : "当前章节";
+
+  switch (action) {
+    case "expand":
+      return [
+        `在原文已经披露的技术方案基础上补足 ${scopeLabel} 的实现细节、部件关系、步骤衔接、限定条件或可选实施方式。`,
+        "优先补充能支撑专利授权和充分公开的内容，如模块交互、处理流程、结构连接方式、参数关系或实施变体。",
+        "如果原文缺少依据，宁可克制扩写，也不要杜撰实验数据、具体数值、对比结论或新的核心技术特征。",
+      ];
+    case "fix_legal":
+      return [
+        `将 ${scopeLabel} 改写为中国专利申请常用文体，统一术语和句式，使其更适合正式专利文本。`,
+        "删除口语化、宣传性和结论先行的表达，改为审慎、客观、可审查的措辞。",
+        "避免绝对化表述，必要时使用“可选地”“进一步地”“在一些实施方式中”等稳妥表达。",
+      ];
+    case "polish":
+    default:
+      return [
+        `仅优化 ${scopeLabel} 的行文、术语、逻辑衔接和语病，不新增无依据的技术内容。`,
+        "保留原有技术事实、保护边界、结论方向和段落结构，避免越润色越跑题。",
+        "优先消除歧义、重复、代词指代不清和工程描述中过于口语化的问题。",
+      ];
+  }
+};
+
+const getRefineSectionRules = (
+  section?: RefineTextSection,
+  action?: RefineTextAction,
+): string[] => {
+  switch (section) {
+    case "abstract":
+      return [
+        "摘要应围绕技术问题、核心方案和主要效果进行客观概括，不写营销性评价。",
+        "不要把摘要改成权利要求式长句；若使用“本发明/本实用新型公开了……”，后续要紧接技术方案描述。",
+        action === "expand"
+          ? "扩充时优先补足关键技术特征和主要处理逻辑，不要扩成实施例全文。"
+          : "保持摘要精炼，避免无意义铺陈。",
+      ];
+    case "claims":
+      return [
+        "保留现有权利要求编号顺序、引用关系和层级，不随意增删权利要求。",
+        "每条权利要求尽量保持为一句完整法律句式，特征之间的关系要明确。",
+        action === "fix_legal"
+          ? "独立权利要求优先使用“其特征在于”，从属权利要求优先使用“根据权利要求X所述……其特征在于……”。"
+          : "润色或扩充时不要无依据扩大保护范围，也不要把从属特征写回独立权利要求。",
+      ];
+    case "technicalField":
+      return [
+        "技术领域通常使用“本发明涉及……技术领域，尤其涉及……”或对应实用新型表达。",
+        "保持篇幅简洁，只说明所属技术领域，不展开背景、效果或实施细节。",
+      ];
+    case "backgroundArt":
+      return [
+        "先客观交代现有技术，再指出其缺陷或不足，且缺陷应与待解决的技术问题对应。",
+        "避免直接贬损现有技术或作无法验证的对比结论。",
+      ];
+    case "inventionContent":
+      return [
+        "优先写清技术问题、解决方案和有益效果三层逻辑，结构要清楚。",
+        "扩充时重点补足核心技术手段之间的配合关系，而不是泛泛描述目标。",
+      ];
+    case "descriptionOfDrawings":
+      return [
+        "按图号逐项说明，常用句式为“图1为……示意图”“图2为……流程图”。",
+        "不得新增原文不存在的图号，也不要把附图说明写成具体实施方式。",
+      ];
+    case "detailedDescription":
+      return [
+        "围绕实施例展开，明确模块组成、连接关系、步骤顺序、参数条件和可选变形。",
+        "适当使用“可选地”“进一步地”“在一些实施方式中”等专利文体连接语。",
+      ];
+    default:
+      return [
+        "保持原文结构、编号和公式不变，使文本更符合中国专利申请文件的表达习惯。",
+      ];
+  }
+};
+
+const buildRefineContextLines = (options?: RefineTextOptions): string[] => {
+  if (!options) {
+    return [];
+  }
+
+  const lines = [
+    options.title ? `发明名称：${truncateForPrompt(options.title, 120)}` : "",
+    `文稿类型：${getPatentTypeLabel(options.patentType)}`,
+    options.section
+      ? `当前章节：${REFINE_SECTION_LABELS[options.section]}`
+      : "",
+    options.technicalField
+      ? `技术领域参考：${truncateForPrompt(options.technicalField, 220)}`
+      : "",
+    options.technicalProblem
+      ? `待解决问题参考：${truncateForPrompt(options.technicalProblem, 260)}`
+      : "",
+    options.backgroundArt
+      ? `背景技术参考：${truncateForPrompt(options.backgroundArt, 360)}`
+      : "",
+    options.inventionContent
+      ? `核心技术方案参考：${truncateForPrompt(options.inventionContent, 520)}`
+      : "",
+    options.descriptionOfDrawings
+      ? `附图说明参考：${truncateForPrompt(options.descriptionOfDrawings, 240)}`
+      : "",
+    options.claimStrategy
+      ? `保护策略参考：${truncateForPrompt(options.claimStrategy, 320)}`
+      : "",
+  ].filter(Boolean);
+
+  return lines;
+};
+
 /**
  * Performs a Novelty Search using gemini-2.5-flash and Google Search Grounding.
  * This fulfills Requirement 2: "Check patent system, judge success probability".
@@ -305,12 +485,14 @@ export const performNoveltySearch = async (
       report = JSON.parse(jsonString) as NoveltyReport;
       // score 可能是字符串 "82" 而非数字 82
       const rawScore = (report as any).score;
-      report.score = typeof rawScore === "number"
-        ? rawScore
-        : typeof rawScore === "string"
-          ? parseInt(rawScore, 10) || extractScore(jsonString)
-          : extractScore(jsonString);
-      if (report.score < 0 || report.score > 100) report.score = extractScore(jsonString);
+      report.score =
+        typeof rawScore === "number"
+          ? rawScore
+          : typeof rawScore === "string"
+            ? parseInt(rawScore, 10) || extractScore(jsonString)
+            : extractScore(jsonString);
+      if (report.score < 0 || report.score > 100)
+        report.score = extractScore(jsonString);
       if (typeof report.analysis !== "string") report.analysis = "";
       if (!Array.isArray(report.priorArtLinks)) report.priorArtLinks = [];
     } catch (e) {
@@ -319,11 +501,15 @@ export const performNoveltySearch = async (
 
       let analysis = "";
       // 尝试提取 analysis 字段值（允许内部有换行和引号）
-      const analysisMatch = jsonString.match(/"analysis"\s*:\s*"([\s\S]*?)(?<!\\)",/);
+      const analysisMatch = jsonString.match(
+        /"analysis"\s*:\s*"([\s\S]*?)(?<!\\)",/,
+      );
       if (analysisMatch) {
         analysis = analysisMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
       } else {
-        const altMatch = jsonString.match(/analysis\s*[:=]\s*(["']?)([\s\S]*?)\1[,}]/);
+        const altMatch = jsonString.match(
+          /analysis\s*[:=]\s*(["']?)([\s\S]*?)\1[,}]/,
+        );
         if (altMatch) analysis = altMatch[2];
       }
       if (!analysis) analysis = text; // 最坏情况把原始文本投给前端
@@ -844,8 +1030,7 @@ const generatePatentDrawingQwen = async (prompt: string): Promise<string> => {
 
   const DASHSCOPE_IMAGE_URL =
     "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis";
-  const DASHSCOPE_TASK_URL =
-    "https://dashscope.aliyuncs.com/api/v1/tasks/";
+  const DASHSCOPE_TASK_URL = "https://dashscope.aliyuncs.com/api/v1/tasks/";
 
   // 1. Submit task
   let taskId: string;
@@ -853,7 +1038,7 @@ const generatePatentDrawingQwen = async (prompt: string): Promise<string> => {
     const submitRes = await fetch(DASHSCOPE_IMAGE_URL, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${QWEN_API_KEY}`,
+        Authorization: `Bearer ${QWEN_API_KEY}`,
         "Content-Type": "application/json",
         "X-DashScope-Async": "enable",
       },
@@ -864,10 +1049,13 @@ const generatePatentDrawingQwen = async (prompt: string): Promise<string> => {
       }),
     });
     if (!submitRes.ok) {
-      console.error("Qwen image task submission failed:", await submitRes.text());
+      console.error(
+        "Qwen image task submission failed:",
+        await submitRes.text(),
+      );
       return "";
     }
-    const submitData = await submitRes.json() as {
+    const submitData = (await submitRes.json()) as {
       output?: { task_id?: string };
     };
     taskId = submitData.output?.task_id ?? "";
@@ -887,10 +1075,10 @@ const generatePatentDrawingQwen = async (prompt: string): Promise<string> => {
     await new Promise((r) => setTimeout(r, 3000));
     try {
       const pollRes = await fetch(`${DASHSCOPE_TASK_URL}${taskId}`, {
-        headers: { "Authorization": `Bearer ${QWEN_API_KEY}` },
+        headers: { Authorization: `Bearer ${QWEN_API_KEY}` },
       });
       if (!pollRes.ok) continue;
-      const pollData = await pollRes.json() as {
+      const pollData = (await pollRes.json()) as {
         output?: {
           task_status?: string;
           results?: Array<{ url?: string }>;
@@ -982,40 +1170,64 @@ export const generatePatentDrawing = async (
 };
 
 /**
- * Refines/Polishes a text segment.
- * Fulfills Requirement 3: "Support modification, completion, beautification".
+ * 对专利文本执行语言润色、智能扩充或法言法语改写。
+ * @param text 待处理的纯文本，调用方应先去除 HTML 标签并保留必要编号结构。
+ * @param action 处理动作：expand 为智能扩充，polish 为语言润色，fix_legal 为法言法语。
+ * @param options 当前章节和专利上下文，用于约束输出风格、结构和授权风险。
+ * @returns 改写后的 Markdown/纯文本；若调用失败则返回原文本。
  */
 export const refineText = async (
   text: string,
-  action: "expand" | "polish" | "fix_legal",
+  action: RefineTextAction,
+  options?: RefineTextOptions,
 ): Promise<string> => {
-  let instruction = "";
-  switch (action) {
-    case "expand":
-      instruction = "扩充这段文字，使其更加详尽，增加具体实施方式的细节。";
-      break;
-    case "polish":
-      instruction = "润色这段文字，使其语言更加通顺、专业，消除语病。";
-      break;
-    case "fix_legal":
-      instruction =
-        "将这段文字转化为标准的专利法律术语，使其符合权利要求的规范性。";
-      break;
+  const normalizedText = text.trim();
+  if (!normalizedText) {
+    return text;
   }
 
+  const sectionLabel = options?.section
+    ? REFINE_SECTION_LABELS[options.section]
+    : "当前文本";
+  const actionLabel = REFINE_ACTION_LABELS[action];
+  const actionRules = getRefineActionRules(action, options)
+    .map((rule, index) => `${index + 1}. ${rule}`)
+    .join("\n");
+  const sectionRules = getRefineSectionRules(options?.section, action)
+    .map((rule, index) => `${index + 1}. ${rule}`)
+    .join("\n");
+  const contextLines = buildRefineContextLines(options).join("\n");
+  const scopeRule =
+    options?.operationScope === "selection"
+      ? "你输出的结果必须能直接替换所选片段，与前后文自然衔接，不要额外补章节标题。"
+      : "如原文已有标题、列表、编号或分段，请默认保留其组织方式。";
+
   const prompt = `
-    原文：
-    "${text}"
-    
-    任务：${instruction}
-    
-    要求：保持Markdown格式，保留原有的数学公式（LaTeX）。
-    
-    请直接输出修改后的文本，不需要解释。
+    现在请对专利文本执行“${actionLabel}”。
+
+    处理对象：${sectionLabel}
+    ${contextLines ? `专利上下文：\n${contextLines}\n` : ""}
+    处理目标：
+    ${actionRules}
+
+    章节规范：
+    ${sectionRules}
+
+    输出要求：
+    1. 只输出改写后的正文，不要解释、不加提示语、不加代码块。
+    2. 保留 Markdown 结构、LaTeX 公式、图号、步骤号、权利要求编号和原有层级。
+    3. 不编造实验数据、数值范围、实施例编号、对比结论、法律结论或新附图。
+    4. ${scopeRule}
+
+    原文开始
+    ${normalizedText}
+    原文结束
   `;
 
   try {
-    const { text: generated } = await generateText(prompt, "pro");
+    const { text: generated } = await generateText(prompt, "pro", {
+      systemInstruction: REFINE_TEXT_SYSTEM_INSTRUCTION,
+    });
     return generated || text;
   } catch (error) {
     console.error("Refinement failed:", error);
@@ -1239,11 +1451,14 @@ export const generateClaims = async (
       dependentClaims?: string[];
     };
 
-    const independent =
-      result.independentClaims?.[0] || "权利要求生成失败";
+    const independent = result.independentClaims?.[0] || "权利要求生成失败";
     const dependent = result.dependentClaims || [];
 
-    return JSON.stringify({ independentClaims: [independent], dependentClaims: dependent }, null, 2);
+    return JSON.stringify(
+      { independentClaims: [independent], dependentClaims: dependent },
+      null,
+      2,
+    );
   } catch (error) {
     console.error("generateClaims failed:", error);
     return JSON.stringify(
@@ -1361,18 +1576,38 @@ export const generateEmbodiments = async (
     const { text } = await generateText(prompt, "fast", { jsonMode: true });
     const jsonString = extractJsonObject(text);
     const result = JSON.parse(jsonString) as {
-      embodiments?: Array<{ title?: string; description?: string; parameters?: Record<string, string> }>;
+      embodiments?: Array<{
+        title?: string;
+        description?: string;
+        parameters?: Record<string, string>;
+      }>;
     };
 
     if (!result.embodiments || result.embodiments.length === 0) {
-      return JSON.stringify({ embodiments: [{ title: "实施例1", description: "生成失败，请重试", parameters: {} }] }, null, 2);
+      return JSON.stringify(
+        {
+          embodiments: [
+            {
+              title: "实施例1",
+              description: "生成失败，请重试",
+              parameters: {},
+            },
+          ],
+        },
+        null,
+        2,
+      );
     }
 
     return JSON.stringify({ embodiments: result.embodiments }, null, 2);
   } catch (error) {
     console.error("generateEmbodiments failed:", error);
     return JSON.stringify(
-      { embodiments: [{ title: "实施例1", description: "生成失败，请重试", parameters: {} }] },
+      {
+        embodiments: [
+          { title: "实施例1", description: "生成失败，请重试", parameters: {} },
+        ],
+      },
       null,
       2,
     );
@@ -1432,7 +1667,9 @@ export const generateMermaidDiagrams = async (
 ): Promise<string[]> => {
   // Parse figure count strictly from descriptionOfDrawings
   const figureMatches = descriptionOfDrawings.match(/图\s*(\d+)/g) || [];
-  const uniqueFigures = [...new Set(figureMatches.map(m => m.replace(/\s/g, '')))];
+  const uniqueFigures = [
+    ...new Set(figureMatches.map((m) => m.replace(/\s/g, ""))),
+  ];
   const figureCount = Math.min(Math.max(uniqueFigures.length || 1, 1), 6);
 
   const prompt = `
@@ -1450,7 +1687,7 @@ ${detailedDescription.slice(0, 1500)}
 ${descriptionOfDrawings}
 
 核心要求：
-1. 附图说明中共有 ${figureCount} 幅图（${uniqueFigures.join('、')}），必须为每一幅图单独生成一个 Mermaid 图表
+1. 附图说明中共有 ${figureCount} 幅图（${uniqueFigures.join("、")}），必须为每一幅图单独生成一个 Mermaid 图表
 2. 每幅图的内容必须严格对应附图说明中该图的文字描述，不得凭空创造附图说明中未提及的内容
 3. 根据图的描述选择最合适的 Mermaid 图类型：
    - 流程图/方法步骤 → flowchart TD
