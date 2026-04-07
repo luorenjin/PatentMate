@@ -283,33 +283,52 @@ export const performNoveltySearch = async (
 
     const jsonString = extractJsonObject(text);
 
+    /** 从任意文本中尽力提取 0-100 数字分数 */
+    const extractScore = (src: string): number => {
+      // 1. "score": 82 或 "score": "82"
+      const explicit = src.match(/"score"\s*:\s*["']?(\d{1,3})["']?/);
+      if (explicit) {
+        const n = parseInt(explicit[1], 10);
+        if (n >= 0 && n <= 100) return n;
+      }
+      // 2. 退化到全文第一个 1-3 位整数（粗略）
+      const loose = src.match(/\b([1-9]\d{0,2})\b/);
+      if (loose) {
+        const n = parseInt(loose[1], 10);
+        if (n >= 0 && n <= 100) return n;
+      }
+      return 50; // 无法解析时给中性分，不误导用户
+    };
+
     let report: NoveltyReport;
     try {
       report = JSON.parse(jsonString) as NoveltyReport;
-      if (typeof report.score !== "number") report.score = 0;
+      // score 可能是字符串 "82" 而非数字 82
+      const rawScore = (report as any).score;
+      report.score = typeof rawScore === "number"
+        ? rawScore
+        : typeof rawScore === "string"
+          ? parseInt(rawScore, 10) || extractScore(jsonString)
+          : extractScore(jsonString);
+      if (report.score < 0 || report.score > 100) report.score = extractScore(jsonString);
       if (typeof report.analysis !== "string") report.analysis = "";
       if (!Array.isArray(report.priorArtLinks)) report.priorArtLinks = [];
     } catch (e) {
-      // 解析失败，尝试用正则提取 analysis 字段
+      // JSON 解析失败：用正则从原文中分别提取各字段
+      const score = extractScore(jsonString);
+
       let analysis = "";
-      const analysisMatch = jsonString.match(
-        /"analysis"\s*:\s*"([\s\S]*?)"[,}]/,
-      );
+      // 尝试提取 analysis 字段值（允许内部有换行和引号）
+      const analysisMatch = jsonString.match(/"analysis"\s*:\s*"([\s\S]*?)(?<!\\)",/);
       if (analysisMatch) {
         analysis = analysisMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
       } else {
-        // 尝试匹配 analysis: ... 形式
-        const altMatch = jsonString.match(
-          /analysis\s*[:=]\s*(["']?)([\s\S]*?)\1[,}]/,
-        );
+        const altMatch = jsonString.match(/analysis\s*[:=]\s*(["']?)([\s\S]*?)\1[,}]/);
         if (altMatch) analysis = altMatch[2];
       }
-      if (!analysis) analysis = jsonString;
-      report = {
-        score: 0,
-        analysis,
-        priorArtLinks: [],
-      };
+      if (!analysis) analysis = text; // 最坏情况把原始文本投给前端
+
+      report = { score, analysis, priorArtLinks: [] };
     }
 
     if (groundingLinks.length > 0) {
@@ -479,8 +498,8 @@ export const summarizeTechnicalDisclosure = async (
     3. technicalHighlights：提炼 3-6 个必须保护的关键技术特征。
     4. embodiments：提炼 2-5 个可实施的实施方式或实施步骤。
     5. advantages：提炼 2-5 个技术效果或业务价值。
-    6. alternativeSolutions：提炼可替代实现、变体或扩展方向；没有则返回空数组。
-    7. evidenceMaterials：提炼实验数据、对比结果、工艺参数、结构尺寸、流程图等可补充证据；没有则返回空数组。
+    6. alternativeSolutions：【仅】提炼可替代的技术实现路径或结构变体，描述形式为"A可改用B实现"或"模块C可替换为D"；【严禁】将实验数据、量化指标或工艺参数混入此字段；没有则返回空数组。
+    7. evidenceMaterials：【仅】提炼已知的量化数据、测试结论、实验对比或关键工艺参数，格式如"与现有方法相比XX提升18%"或"关键参数：采样频率200Hz"；【严禁】将替代方案或定性描述混入此字段；没有则返回空数组。
     8. risks：指出仍然缺失的信息，如边界条件、关键参数、与现有技术差异不够明确等。
 
     JSON 结构如下：
@@ -588,9 +607,11 @@ export const runDisclosureInterviewTurn = async (
 
     任务：
     1. 用 2-4 句话回复工程师，确认你理解了哪些信息，并只追问最关键的缺口。
-    2. 更新结构化交底结果，不丢失原有信息。
-    3. pendingQuestions 最多给出 3 个下一轮最值得问的问题，必须具体，不要泛泛而谈。
-    4. risks 列出仍然影响保护策略质量的信息缺口。
+    2. 更新结构化交底结果，不丢失原有信息。字段填写规则：
+       - alternativeSolutions：【仅】记录"A可替换为B"形式的替代实现路径，【严禁】混入数值数据或实验结论。
+       - evidenceMaterials：【仅】记录已知的量化指标、实验对比数据或关键工艺参数，【严禁】混入替代方案描述；已识别的所有证据条目必须完整保留，并从本轮说明追加新提取的量化数据，禁止缩短或清空该字段。
+    3. pendingQuestions 最多给出 3 个下一轮追问，必须具体，不要泛泛而谈。若当前 evidenceMaterials 少于 2 条，其中至少 1 个问题必须明确要求工程师提供可量化的对比数据、关键参数或实验结论（如精度指标、处理时延、良率提升比例、关键尺寸/阈值等）。
+    4. risks 列出仍然影响保护策略质量的信息缺口。若 evidenceMaterials 缺乏可量化数据，务必在 risks 中标注"缺少量化证据或关键参数，建议补充对比实验数据"。
 
     请返回 JSON：
     {
@@ -1396,5 +1417,67 @@ export const generateDrawingsDescription = async (
   } catch (error) {
     console.error("generateDrawingsDescription failed:", error);
     return "生成失败，请重试。";
+  }
+};
+
+/**
+ * Generate Mermaid diagram code for each figure described in the patent.
+ * Returns an array of Mermaid code strings, one per figure.
+ */
+export const generateMermaidDiagrams = async (
+  title: string,
+  inventionContent: string,
+  detailedDescription: string,
+  descriptionOfDrawings: string,
+): Promise<string[]> => {
+  // Parse figure count strictly from descriptionOfDrawings
+  const figureMatches = descriptionOfDrawings.match(/图\s*(\d+)/g) || [];
+  const uniqueFigures = [...new Set(figureMatches.map(m => m.replace(/\s/g, '')))];
+  const figureCount = Math.min(Math.max(uniqueFigures.length || 1, 1), 6);
+
+  const prompt = `
+你是一位专业的中国专利代理师兼技术绘图专家。你的任务是严格根据【附图说明】中每幅图的文字描述，结合专利技术内容，为每一幅附图生成对应的 Mermaid 图表代码。
+
+发明名称：${title}
+
+发明内容摘要：
+${inventionContent}
+
+具体实施方式（节选）：
+${detailedDescription.slice(0, 1500)}
+
+【附图说明】（核心依据，必须严格遵照）：
+${descriptionOfDrawings}
+
+核心要求：
+1. 附图说明中共有 ${figureCount} 幅图（${uniqueFigures.join('、')}），必须为每一幅图单独生成一个 Mermaid 图表
+2. 每幅图的内容必须严格对应附图说明中该图的文字描述，不得凭空创造附图说明中未提及的内容
+3. 根据图的描述选择最合适的 Mermaid 图类型：
+   - 流程图/方法步骤 → flowchart TD
+   - 系统架构/模块关系 → graph LR 或 graph TB
+   - 时序/交互 → sequenceDiagram
+   - 类/数据结构 → classDiagram
+4. 节点文字用中文，简洁清晰，每个节点不超过10个字
+5. 图表要真实反映附图说明中该图所描述的技术内容
+6. 严格输出合法的 Mermaid 语法，不要包含任何解释性文字
+7. 返回 JSON 格式，diagrams 数组长度必须等于 ${figureCount}
+
+JSON 格式：
+{
+  "diagrams": [
+    "flowchart TD\\n    A[开始] --> B[步骤1]\\n    B --> C[结束]",
+    "graph LR\\n    A[模块A] --> B[模块B]"
+  ]
+}
+`;
+
+  try {
+    const { text } = await generateText(prompt, "pro", { jsonMode: true });
+    const jsonStr = extractJsonObject(text);
+    const result = JSON.parse(jsonStr) as { diagrams?: string[] };
+    return result.diagrams || [];
+  } catch (error) {
+    console.error("generateMermaidDiagrams failed:", error);
+    return [];
   }
 };

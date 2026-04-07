@@ -8,6 +8,49 @@ import EmbodimentGenerator from './EmbodimentGenerator';
 import DrawingsGenerator from './DrawingsGenerator';
 import { renderMarkdown } from '../../services/markdownService';
 
+// Convert JSON-format claims string to numbered Markdown text
+const claimsJsonToMarkdown = (jsonStr: string): string => {
+  try {
+    const data = JSON.parse(jsonStr) as {
+      independentClaims?: string[];
+      dependentClaims?: string[];
+    };
+    const lines: string[] = [];
+    let num = 1;
+    (data.independentClaims || []).forEach((claim) => {
+      lines.push(`${num}. ${claim}`);
+      num++;
+    });
+    (data.dependentClaims || []).forEach((claim) => {
+      lines.push(`${num}. ${claim}`);
+      num++;
+    });
+    return lines.join('\n\n');
+  } catch {
+    return jsonStr; // fallback: return as-is
+  }
+};
+
+// Convert JSON-format embodiments string to Markdown text
+const embodimentsJsonToMarkdown = (jsonStr: string): string => {
+  try {
+    const data = JSON.parse(jsonStr) as {
+      embodiments?: Array<{ title?: string; description?: string; parameters?: Record<string, string> }>;
+    };
+    const sections = (data.embodiments || []).map((e, idx) => {
+      const header = `## ${e.title || `实施例${idx + 1}`}`;
+      const desc = e.description || '';
+      const params = e.parameters && Object.keys(e.parameters).length > 0
+        ? '\n\n**相关参数：**\n' + Object.entries(e.parameters).map(([k, v]) => `- ${k}：${v}`).join('\n')
+        : '';
+      return `${header}\n\n${desc}${params}`;
+    });
+    return sections.join('\n\n---\n\n');
+  } catch {
+    return jsonStr; // fallback: return as-is
+  }
+};
+
 interface DraftingContainerProps {
   patentData: PatentData;
   updatePatentData: (field: keyof PatentData, value: any) => void;
@@ -181,27 +224,75 @@ const DraftingContainer: React.FC<DraftingContainerProps> = ({
     }
   };
 
+  const stageLabels: Record<DraftingStage, string> = {
+    abstract: '摘要',
+    claims: '权利要求',
+    description: '说明书',
+    embodiment: '实施例',
+    drawings: '附图说明',
+  };
+
   return (
-    <div className="max-w-4xl mx-auto">
-      <div className="mb-8">
-        <h2 className="text-2xl font-bold text-slate-900 mb-2">专利智能撰写</h2>
-        <p className="text-slate-600">
-          基于技术交底信息，逐步生成专利申请文件的各个部分
-        </p>
+    <div className="max-w-7xl mx-auto space-y-8 pb-20">
+      {/* Top navigation bar */}
+      <div className="flex justify-between items-center">
+        <button onClick={onBack} className="text-slate-500 hover:text-slate-800 flex items-center gap-2 font-medium">
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+          返回
+        </button>
+        <button onClick={onSave} className="bg-white border border-slate-300 text-slate-700 px-4 py-2 rounded-lg font-medium hover:bg-slate-50 flex items-center gap-2">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>
+          保存项目
+        </button>
       </div>
 
-      <StageProgress
-        currentStage={progress.currentStage}
-        confirmedStages={confirmedStages}
-      />
+      <section className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+        {/* Dark gradient header */}
+        <div className="px-8 py-7 bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 text-white">
+          <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6">
+            <div>
+              <div className="text-indigo-300 text-sm font-semibold tracking-[0.2em] uppercase mb-3">AI Drafting</div>
+              <h2 className="text-3xl font-bold mb-3">步骤 2：专利智能撰写</h2>
+              <p className="text-slate-300 max-w-3xl leading-relaxed">
+                基于已完成的技术交底，逐步生成专利申请文件各个部分，每个阶段确认后方可推进至下一阶段。
+              </p>
+            </div>
+            <div className="min-w-[240px] bg-white/10 border border-white/10 rounded-2xl p-5 backdrop-blur-sm">
+              <div className="flex items-center justify-between text-sm text-slate-200 mb-2">
+                <span>当前阶段</span>
+                <span className="text-xl font-bold text-white">{currentIndex + 1} / {stages.length}</span>
+              </div>
+              <div className="h-3 bg-white/10 rounded-full overflow-hidden mb-3">
+                <div
+                  className="h-full bg-gradient-to-r from-indigo-300 via-violet-300 to-cyan-300 rounded-full transition-all"
+                  style={{ width: `${Math.max(8, ((confirmedStages.length) / stages.length) * 100)}%` }}
+                />
+              </div>
+              <div className="text-xs text-slate-300">
+                {confirmedStages.length === stages.length
+                  ? '所有阶段已完成，可进入文稿编辑。'
+                  : `正在撰写：${stageLabels[progress.currentStage]}`}
+              </div>
+            </div>
+          </div>
+        </div>
 
-      <div className="mt-8">
-        {renderCurrentStage()}
-      </div>
+        {/* Stage progress stepper */}
+        <div className="px-8 pt-6">
+          <StageProgress
+            currentStage={progress.currentStage}
+            confirmedStages={confirmedStages}
+          />
+        </div>
+
+        {/* Current stage content */}
+        <div className="px-8 pb-8">
+          {renderCurrentStage()}
+        </div>
 
       {/* All complete indicator */}
       {progress.drawings.isConfirmed && (
-        <div className="mt-8 p-6 bg-green-50 border border-green-200 rounded-2xl text-center">
+        <div className="mx-8 mb-8 p-6 bg-green-50 border border-green-200 rounded-2xl text-center">
           <div className="text-green-600 font-semibold mb-2">
             专利撰写已完成！
           </div>
@@ -224,7 +315,7 @@ const DraftingContainer: React.FC<DraftingContainerProps> = ({
                   updatePatentData('abstract', renderMarkdown(progress.abstract.content));
                 }
                 if (progress.claims.content) {
-                  updatePatentData('claims', renderMarkdown(progress.claims.content));
+                  updatePatentData('claims', renderMarkdown(claimsJsonToMarkdown(progress.claims.content)));
                 }
                 
                 if (progress.description.content) {
@@ -264,7 +355,7 @@ const DraftingContainer: React.FC<DraftingContainerProps> = ({
                   updatePatentData('descriptionOfDrawings', renderMarkdown(progress.drawings.content));
                 }
                 if (progress.embodiment.content) {
-                  updatePatentData('detailedDescription', renderMarkdown(progress.embodiment.content));
+                  updatePatentData('detailedDescription', renderMarkdown(embodimentsJsonToMarkdown(progress.embodiment.content)));
                 }
 
                 onSave();
@@ -277,6 +368,7 @@ const DraftingContainer: React.FC<DraftingContainerProps> = ({
           </div>
         </div>
       )}
+      </section>
     </div>
   );
 };

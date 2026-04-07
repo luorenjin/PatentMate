@@ -166,6 +166,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
   const [isPreparingDraft, setIsPreparingDraft] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [optimizedContent, setOptimizedContent] = useState<string | null>(null);
+  const [optimizedContentMarkdown, setOptimizedContentMarkdown] = useState<string | null>(null);
   const [report, setReport] = useState<NoveltyReport | null>(null);
   const [riskTips, setRiskTips] = useState<string[]>([]);
   const [interviewInput, setInterviewInput] = useState('');
@@ -173,6 +174,9 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
   const [localParseTips, setLocalParseTips] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [focusTarget, setFocusTarget] = useState<{ id: string; tick: number } | null>(null);
+  const [showRiskPanel, setShowRiskPanel] = useState(false);
+  const [showStrategyPanel, setShowStrategyPanel] = useState(false);
+  const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
 
   const titleInputRef = useRef<HTMLInputElement>(null);
   const disclosureNotesRef = useRef<HTMLDivElement>(null);
@@ -183,6 +187,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
   const embodimentsRef = useRef<HTMLDivElement>(null);
   const advantagesRef = useRef<HTMLDivElement>(null);
   const evidenceMaterialsRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
 
   const claimStrategyDraft = patentData.claimStrategy;
 
@@ -222,6 +227,19 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
       updatePatentData('draftReadiness', draftReadiness);
     }
   }, [draftReadiness, patentData.draftReadiness, updatePatentData]);
+
+  // Auto-scroll chat to bottom when new messages arrive or AI starts thinking
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, [patentData.disclosureInterview, isInterviewing]);
+
+  useEffect(() => {
+    if (patentData.claimStrategy.trim()) {
+      setShowStrategyPanel(true);
+    }
+  }, [patentData.claimStrategy]);
 
   const focusField = (target: keyof typeof fieldRefs) => {
     const targetRef = fieldRefs[target];
@@ -328,11 +346,16 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
       updatePatentData('embodiments', result.embodiments);
       updatePatentData('advantages', result.advantages);
       updatePatentData('alternativeSolutions', result.alternativeSolutions);
-      updatePatentData('evidenceMaterials', result.evidenceMaterials);
+      // 合并证据材料：保留前端已有条目，追加 AI 本轮新提取的条目，去重
+      const mergedEvidence = Array.from(
+        new Set([...patentData.evidenceMaterials, ...result.evidenceMaterials]),
+      );
+      updatePatentData('evidenceMaterials', mergedEvidence);
       updatePatentData('disclosurePendingQuestions', result.pendingQuestions);
       updatePatentData('strategyRisks', result.risks);
       updatePatentData('status', 'disclosure_review');
       setRiskTips(result.risks);
+      if (result.risks.length > 0) setShowRiskPanel(true);
 
       const mergedPatentData = {
         ...nextPatentData,
@@ -343,12 +366,15 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
         embodiments: result.embodiments,
         advantages: result.advantages,
         alternativeSolutions: result.alternativeSolutions,
-        evidenceMaterials: result.evidenceMaterials,
+        evidenceMaterials: mergedEvidence,
         strategyRisks: result.risks,
         disclosurePendingQuestions: result.pendingQuestions,
       };
 
-      await applyStrategyPackage(mergedPatentData);
+      // 策略包更新独立运行，不阻塞访谈显示，失败不影响用户体验
+      applyStrategyPackage(mergedPatentData).catch((e) =>
+        console.error('Strategy package update failed (non-critical):', e),
+      );
     } catch (err) {
       setError('交底访谈失败，请重试。');
     } finally {
@@ -379,6 +405,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
       updatePatentData('strategyRisks', structured.risks);
       updatePatentData('status', 'disclosure_review');
       setRiskTips(structured.risks);
+      if (structured.risks.length > 0) setShowRiskPanel(true);
       await applyStrategyPackage({
         ...patentData,
         disclosureNotes: idea,
@@ -436,6 +463,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
       updatePatentData('strategyRisks', structured.risks);
       updatePatentData('status', 'disclosure_review');
       setRiskTips(structured.risks);
+      if (structured.risks.length > 0) setShowRiskPanel(true);
       await applyStrategyPackage({
         ...patentData,
         disclosureSummary: structured.summary,
@@ -512,6 +540,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
     try {
       const result = await performNoveltySearch(patentData.title, disclosurePayload);
       setReport(result);
+      setIsSearchModalOpen(true);
       updatePatentData('status', 'disclosure_review');
     } catch (err) {
       setError('挑战式检索失败，请检查网络或 API Key 设置。');
@@ -528,6 +557,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
 
     try {
       const optimizedContentRaw = await optimizeInventionContent(disclosurePayload, report.analysis);
+      setOptimizedContentMarkdown(optimizedContentRaw);
       setOptimizedContent(renderMarkdown(optimizedContentRaw));
     } catch (err) {
       setError('AI 补强建议生成失败，请重试。');
@@ -537,9 +567,9 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
   };
 
   const handleAcceptOptimization = () => {
-    if (!optimizedContent) return;
+    if (!optimizedContent || !optimizedContentMarkdown) return;
 
-    const mergedSummary = [patentData.disclosureSummary, stripHtml(optimizedContent)]
+    const mergedSummary = [patentData.disclosureSummary, optimizedContentMarkdown]
       .filter(Boolean)
       .join('\n\n');
 
@@ -550,6 +580,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
       disclosureSummary: mergedSummary,
     });
     setOptimizedContent(null);
+    setOptimizedContentMarkdown(null);
   };
 
   const handleProceedToDraft = async () => {
@@ -614,6 +645,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
   };
 
   return (
+    <>
     <div className="max-w-7xl mx-auto space-y-8 pb-20">
       <div className="flex justify-between items-center">
         <button onClick={onBack} className="text-slate-500 hover:text-slate-800 flex items-center gap-2 font-medium">
@@ -674,22 +706,75 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
             </div>
 
             <div className="bg-slate-50 rounded-2xl border border-slate-200 p-5">
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900">原始技术口述</h3>
-                  <p className="text-sm text-slate-500 mt-1">像和专利工程师开会一样，把背景、改进点、关键结构、流程和效果先说出来。</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button onClick={handleGenerateInterviewDraft} disabled={isGeneratingIdea || isStructuring} className="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium hover:bg-slate-800 disabled:opacity-50">
-                    {isGeneratingIdea ? 'AI 生成中...' : 'AI 生成访谈草稿'}
-                  </button>
-                  <button onClick={handleExtractMarkdown} disabled={isGeneratingIdea || isStructuring} className="px-4 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm font-medium hover:bg-slate-50 disabled:opacity-50">
-                    从 Markdown 提取结构要点
-                  </button>
-                  <button onClick={handleStructureDisclosure} disabled={isStructuring || isGeneratingIdea} className="px-4 py-2 rounded-lg bg-cyan-600 text-white text-sm font-medium hover:bg-cyan-700 disabled:opacity-50">
-                    {isStructuring ? 'AI 整理中...' : 'AI 整理成交底书'}
-                  </button>
-                </div>
+              <div className="mb-4">
+                <h3 className="text-lg font-bold text-slate-900">原始技术口述</h3>
+                <p className="text-sm text-slate-500 mt-1">像和专利工程师开会一样，把背景、改进点、关键结构、流程和效果先说出来。</p>
+              </div>
+
+              {/* 三个操作按钮：保留紧凑按钮形态，按钮内含一行说明文字 */}
+              <div className="flex flex-wrap gap-2 mb-5">
+                <button
+                  type="button"
+                  onClick={handleGenerateInterviewDraft}
+                  disabled={isGeneratingIdea || isStructuring}
+                  className="inline-flex items-start gap-2 px-4 py-2.5 rounded-xl bg-slate-900 text-white hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+                >
+                  {isGeneratingIdea ? (
+                    <svg className="w-4 h-4 mt-0.5 flex-shrink-0 animate-spin text-slate-300" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-4 h-4 mt-0.5 flex-shrink-0 text-yellow-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                    </svg>
+                  )}
+                  <div className="text-left">
+                    <div className="text-sm font-semibold leading-tight cursor-pointer">
+                      {isGeneratingIdea ? 'AI 生成中…' : 'AI 生成访谈草稿'}
+                    </div>
+                    <div className="text-xs text-slate-400 mt-0.5 leading-tight font-normal">没有素材？填完名称直接点这里</div>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleStructureDisclosure}
+                  disabled={isStructuring || isGeneratingIdea}
+                  className="inline-flex items-start gap-2 px-4 py-2.5 rounded-xl bg-cyan-600 text-white hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+                >
+                  {isStructuring ? (
+                    <svg className="w-4 h-4 mt-0.5 flex-shrink-0 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                    </svg>
+                  )}
+                  <div className="text-left">
+                    <div className="text-sm font-semibold leading-tight cursor-pointer">
+                      {isStructuring ? 'AI 整理中…' : 'AI 整理成交底书'}
+                    </div>
+                    <div className="text-xs text-cyan-200 mt-0.5 leading-tight font-normal">有口述内容？让 AI 提炼成结构化字段</div>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleExtractMarkdown}
+                  disabled={isGeneratingIdea || isStructuring}
+                  className="inline-flex items-start gap-2 px-4 py-2.5 rounded-xl bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 hover:border-slate-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+                >
+                  <svg className="w-4 h-4 mt-0.5 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                  </svg>
+                  <div className="text-left">
+                    <div className="text-sm font-semibold leading-tight cursor-pointer">本地 Markdown 提取</div>
+                    <div className="text-xs text-slate-400 mt-0.5 leading-tight font-normal">已有 Markdown 文档？不调 AI，即时离线解析</div>
+                  </div>
+                </button>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
@@ -698,7 +783,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                     key={template.id}
                     type="button"
                     onClick={() => handleApplyTemplate(template.id)}
-                    className="text-left rounded-2xl border border-slate-200 bg-white p-4 hover:border-cyan-300 hover:bg-cyan-50 transition-all"
+                    className="text-left rounded-2xl border border-slate-200 bg-white p-4 hover:border-cyan-300 hover:bg-cyan-50 transition-all cursor-pointer shadow-sm"
                   >
                     <div className="text-sm font-semibold text-slate-900 mb-1">{template.name}</div>
                     <div className="text-xs text-slate-500 leading-relaxed">{template.hint}</div>
@@ -745,7 +830,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                 <div className="text-xs text-slate-400">最近 8 轮会作为上下文</div>
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 max-h-[360px] overflow-y-auto space-y-3 mb-4">
+              <div ref={chatContainerRef} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 max-h-[360px] overflow-y-auto space-y-3 mb-4">
                 {patentData.disclosureInterview.length > 0 ? (
                   patentData.disclosureInterview.map((turn, index) => (
                     <div key={`${turn.timestamp}-${index}`} className={`flex ${turn.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -760,6 +845,18 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                 ) : (
                   <div className="text-sm text-slate-500 leading-relaxed">
                     可以直接输入一句技术说明开始访谈，例如“现有方案在低照度下误检率很高，我们加了温漂补偿和双阶段检测”。
+                  </div>
+                )}
+                {isInterviewing && (
+                  <div className="flex justify-start">
+                    <div className="max-w-[85%] rounded-2xl px-4 py-3 text-sm bg-white text-slate-400 border border-slate-200 italic flex items-center gap-2">
+                      <span className="inline-flex gap-1">
+                        <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                        <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                        <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                      </span>
+                      AI 正在分析并整理交底信息…
+                    </div>
                   </div>
                 )}
               </div>
@@ -957,35 +1054,72 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
               </div>
 
               {riskTips.length > 0 && (
-                <div className="mb-4 p-4 bg-amber-50 border border-amber-100 rounded-xl">
-                  <div className="text-sm font-semibold text-amber-800 mb-2">AI 识别的缺口</div>
-                  <ul className="space-y-2 text-sm text-amber-700">
-                    {riskTips.map((risk) => (
-                      <li key={risk}>• {risk}</li>
-                    ))}
-                  </ul>
+                <div className="mb-4 rounded-xl border border-amber-100 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setShowRiskPanel(!showRiskPanel)}
+                    className="w-full flex items-center justify-between px-4 py-2.5 bg-amber-50 hover:bg-amber-100/70 transition-colors"
+                  >
+                    <span className="flex items-center gap-2 text-sm font-semibold text-amber-800">
+                      <span className="w-2 h-2 rounded-full bg-amber-500 flex-shrink-0" />
+                      AI 识别的缺口
+                      <span className="text-xs font-normal text-amber-600">（{riskTips.length} 条）</span>
+                    </span>
+                    <svg className={`w-4 h-4 text-amber-500 transition-transform duration-200 ${showRiskPanel ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  {showRiskPanel && (
+                    <div className="px-4 py-3 bg-amber-50/50 border-t border-amber-100">
+                      <ul className="space-y-1.5 text-sm text-amber-700">
+                        {riskTips.map((risk) => (
+                          <li key={risk}>• {risk}</li>
+                        ))}
+                      </ul>
+                      <p className="text-xs text-amber-600/80 mt-2.5 pt-2 border-t border-amber-100">可通过下方「挑战式新颖性检索」进一步补强差异点</p>
+                    </div>
+                  )}
                 </div>
               )}
 
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
-                <div className="text-sm font-semibold text-slate-800 mb-2">建议的保护骨架</div>
-                <pre className="whitespace-pre-wrap text-sm text-slate-600 leading-relaxed font-sans">
-                  {patentData.claimStrategy || claimStrategyDraft || '当关键技术特征整理完成后，这里会自动生成起草建议。'}
-                </pre>
-                {patentData.independentClaimSkeleton && (
-                  <div className="mt-4 pt-4 border-t border-slate-200">
-                    <div className="text-sm font-semibold text-slate-800 mb-2">独立权利要求骨架</div>
-                    <pre className="whitespace-pre-wrap text-sm text-slate-600 leading-relaxed font-sans">{patentData.independentClaimSkeleton}</pre>
-                  </div>
-                )}
-                {patentData.dependentClaimOptions.length > 0 && (
-                  <div className="mt-4 pt-4 border-t border-slate-200">
-                    <div className="text-sm font-semibold text-slate-800 mb-2">从属层级建议</div>
-                    <ul className="space-y-2 text-sm text-slate-600">
-                      {patentData.dependentClaimOptions.map((item) => (
-                        <li key={item}>• {item}</li>
-                      ))}
-                    </ul>
+              <div className="rounded-xl border border-slate-200 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setShowStrategyPanel(!showStrategyPanel)}
+                  className="w-full flex items-center justify-between px-4 py-2.5 bg-slate-50 hover:bg-slate-100 transition-colors"
+                >
+                  <span className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${patentData.claimStrategy ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                    建议的保护骨架
+                    {patentData.claimStrategy && (
+                      <span className="text-xs font-normal text-emerald-600">已生成</span>
+                    )}
+                  </span>
+                  <svg className={`w-4 h-4 text-slate-500 transition-transform duration-200 ${showStrategyPanel ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                {showStrategyPanel && (
+                  <div className="p-4 bg-white border-t border-slate-200">
+                    <pre className="whitespace-pre-wrap text-sm text-slate-600 leading-relaxed font-sans">
+                      {patentData.claimStrategy || claimStrategyDraft || '当关键技术特征整理完成后，这里会自动生成起草建议。'}
+                    </pre>
+                    {patentData.independentClaimSkeleton && (
+                      <div className="mt-4 pt-4 border-t border-slate-200">
+                        <div className="text-sm font-semibold text-slate-800 mb-2">独立权利要求骨架</div>
+                        <pre className="whitespace-pre-wrap text-sm text-slate-600 leading-relaxed font-sans">{patentData.independentClaimSkeleton}</pre>
+                      </div>
+                    )}
+                    {patentData.dependentClaimOptions.length > 0 && (
+                      <div className="mt-4 pt-4 border-t border-slate-200">
+                        <div className="text-sm font-semibold text-slate-800 mb-2">从属层级建议</div>
+                        <ul className="space-y-2 text-sm text-slate-600">
+                          {patentData.dependentClaimOptions.map((item) => (
+                            <li key={item}>• {item}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -994,90 +1128,273 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
         </div>
       </section>
 
-      <section className="bg-white rounded-3xl border border-slate-200 shadow-sm p-8 space-y-6">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+      {/* 挑战式新颖性检索 — 精简状态栏，操作入口统一在底部固定栏 */}
+      <section className="bg-white rounded-3xl border border-slate-200 shadow-sm px-8 py-5">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h3 className="text-2xl font-bold text-slate-900">挑战式新颖性检索</h3>
-            <p className="text-slate-500 mt-2">
-              不是为了卡住工程师，而是为了在起草前用现有技术反向挑战你的方案，帮助补强差异点和保护边界。
-            </p>
+            <h3 className="text-lg font-bold text-slate-900">挑战式新颖性检索</h3>
+            <p className="text-sm text-slate-500 mt-0.5">用现有技术反向挑战方案，在起草前补强差异点和保护边界。</p>
           </div>
-          <div className="flex flex-wrap gap-3">
-            <button onClick={handleSearch} disabled={isSearching || isPreparingDraft || isOptimizing} className="px-5 py-3 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
-              {isSearching ? '正在挑战式检索...' : '开始检索与对抗分析'}
-            </button>
-            <button onClick={handleProceedToDraft} disabled={isPreparingDraft} className="px-5 py-3 rounded-xl bg-slate-900 text-white font-semibold hover:bg-slate-800 disabled:opacity-50">
-              {isPreparingDraft ? '正在准备起草...' : '交底完成，进入专利起草'}
-            </button>
+          <div className="flex items-center gap-3 flex-shrink-0">
+            {isSearching && (
+              <span className="flex items-center gap-1.5 text-sm text-blue-600">
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                </svg>
+                正在检索…
+              </span>
+            )}
+            {report && !isSearching && (
+              <>
+                <span className={`text-sm font-semibold px-3 py-1.5 rounded-lg ${
+                  report.score >= 80 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
+                }`}>
+                  预估通过率 {report.score}%
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsSearchModalOpen(true)}
+                  className="text-sm font-semibold text-blue-600 hover:text-blue-800 underline underline-offset-2"
+                >
+                  查看详细报告
+                </button>
+              </>
+            )}
+            {!report && !isSearching && (
+              <span className="text-sm text-slate-400">尚未检索 · 点击底部按钮开始</span>
+            )}
           </div>
         </div>
+        {error && <div className="mt-4 p-4 bg-red-50 text-red-600 rounded-xl border border-red-100">{error}</div>}
+      </section>
+    </div>
 
-        {error && <div className="p-4 bg-red-50 text-red-600 rounded-xl border border-red-100">{error}</div>}
+    {/* ───── 新颖性检索结果模态框 ───── */}
+    {isSearchModalOpen && report && (
+      <div
+        className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 pt-10"
+        onClick={(e) => { if (e.target === e.currentTarget) setIsSearchModalOpen(false); }}
+      >
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl mb-10">
+          {/* 模态头部 */}
+          <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+            <div className="flex items-center gap-3">
+              <h3 className="text-xl font-bold text-slate-900">新颖性检索报告</h3>
+              <span className={`text-sm font-semibold px-3 py-1 rounded-full ${
+                report.score >= 80 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+              }`}>
+                预估授权通过率 {report.score}%
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsSearchModalOpen(false)}
+              className="w-8 h-8 flex items-center justify-center rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
 
-        {report && (
-          <div className="space-y-6">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div>
-                <div className="text-sm text-slate-500 mb-1">挑战结果</div>
-                <div className="text-2xl font-bold text-slate-900">预估授权通过率 {report.score}%</div>
-              </div>
-              <div className="flex items-center gap-3">
-                {report.score < 90 && (
-                  <button onClick={handleOptimize} disabled={isOptimizing} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-all disabled:opacity-50">
-                    {isOptimizing ? 'AI 补强中...' : '基于检索结果补强交底'}
+          <div className="px-6 py-5 space-y-6">
+            {/* 综合评分说明 */}
+            <div className={`rounded-xl p-4 flex items-start gap-3 ${
+              report.score >= 80 ? 'bg-emerald-50 border border-emerald-100' : 'bg-amber-50 border border-amber-100'
+            }`}>
+              <svg className={`w-5 h-5 mt-0.5 flex-shrink-0 ${report.score >= 80 ? 'text-emerald-500' : 'text-amber-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {report.score >= 80
+                  ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />}
+              </svg>
+              <p className={`text-sm leading-relaxed ${report.score >= 80 ? 'text-emerald-700' : 'text-amber-700'}`}>
+                {report.score >= 80
+                  ? '当前方案与现有技术差异较明显，可以进入专利起草阶段。建议参考下方分析进一步巩固保护范围。'
+                  : '当前方案与现有技术存在较多重叠，建议先阅读下方 AI 分析，通过「基于检索结果补强交底」功能差异化后再起草。'}
+              </p>
+            </div>
+
+            {/* AI 对抗分析 */}
+            <div>
+              <h4 className="text-sm font-semibold text-slate-700 mb-3">AI 对抗分析</h4>
+              <div className="p-5 bg-slate-50 rounded-xl border border-slate-200 text-slate-600 leading-relaxed prose prose-sm max-w-none prose-slate" dangerouslySetInnerHTML={{ __html: renderMarkdown(report.analysis) }} />
+            </div>
+
+            {/* 基于检索结果补强交底 */}
+            {report.score < 90 && !optimizedContent && (
+              <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-sm font-semibold text-indigo-800 mb-1">基于检索结果补强交底</div>
+                    <p className="text-xs text-indigo-600 leading-relaxed">AI 将结合上方对抗分析，针对性地提出如何扩展或差异化你的技术方案，生成补充建议并直接写入交底摘要。</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleOptimize}
+                    disabled={isOptimizing}
+                    className="flex-shrink-0 flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {isOptimizing ? (
+                      <>
+                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                        </svg>
+                        AI 补强中…
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        开始补强
+                      </>
+                    )}
                   </button>
-                )}
-                <div className={`px-4 py-2 rounded-lg text-sm font-semibold ${report.score >= 80 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                  {report.score >= 80 ? '当前方案可进入起草' : '建议补强后再起草'}
                 </div>
               </div>
-            </div>
+            )}
 
-            <div className="p-6 bg-slate-50 rounded-xl border border-slate-200">
-              <h4 className="font-semibold text-slate-800 mb-3">AI 对抗分析</h4>
-              <div className="text-slate-600 leading-relaxed prose prose-sm max-w-none prose-slate" dangerouslySetInnerHTML={{ __html: renderMarkdown(report.analysis) }} />
-            </div>
+            {/* 补强结果 */}
+            {optimizedContent && (
+              <div className="rounded-xl border border-indigo-200 overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3 bg-indigo-50 border-b border-indigo-100">
+                  <span className="text-sm font-semibold text-indigo-800">AI 补强建议</span>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { handleAcceptOptimization(); setIsSearchModalOpen(false); }}
+                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg transition-colors"
+                    >
+                      采纳并写入交底摘要
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setOptimizedContent(null); setOptimizedContentMarkdown(null); }}
+                      className="px-3 py-1.5 bg-white border border-slate-300 text-slate-600 hover:bg-slate-50 text-xs font-semibold rounded-lg transition-colors"
+                    >
+                      忽略
+                    </button>
+                  </div>
+                </div>
+                <div className="p-5 bg-white max-h-72 overflow-y-auto">
+                  <div className="text-slate-700 leading-relaxed prose prose-sm max-w-none prose-indigo" dangerouslySetInnerHTML={{ __html: optimizedContent }} />
+                </div>
+              </div>
+            )}
 
+            {/* 相关现有技术 */}
             <div>
-              <h4 className="font-semibold text-slate-800 mb-3">相关现有技术</h4>
-              <div className="grid gap-3">
+              <h4 className="text-sm font-semibold text-slate-700 mb-3">相关现有技术参考</h4>
+              <div className="space-y-2">
                 {Array.isArray(report.priorArtLinks) && report.priorArtLinks.length > 0 ? (
                   report.priorArtLinks.map((link, index) => (
-                    <a key={index} href={link.uri} target="_blank" rel="noreferrer" className="block p-4 rounded-lg border border-slate-200 hover:border-blue-400 hover:bg-blue-50 transition-all group w-full overflow-hidden">
-                      <div className="flex flex-col gap-1 w-full">
-                        <span className="font-medium text-slate-700 group-hover:text-blue-700 truncate block w-full" title={link.title}>{link.title || '未知标题'}</span>
-                        <span className="text-xs text-slate-400 group-hover:text-blue-500 break-all line-clamp-2">{link.uri}</span>
+                    <a
+                      key={index}
+                      href={link.uri}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-start gap-3 p-3 rounded-xl border border-slate-200 hover:border-blue-300 hover:bg-blue-50 transition-all group"
+                    >
+                      <svg className="w-4 h-4 mt-0.5 flex-shrink-0 text-slate-400 group-hover:text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                      </svg>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-slate-700 group-hover:text-blue-700 truncate">{link.title || '未知标题'}</div>
+                        <div className="text-xs text-slate-400 group-hover:text-blue-500 truncate mt-0.5">{link.uri}</div>
                       </div>
                     </a>
                   ))
                 ) : (
-                  <p className="text-slate-500 text-sm italic p-4 bg-slate-50 rounded-lg">未找到明确的现有技术链接。</p>
+                  <p className="text-sm text-slate-400 italic">未找到明确的现有技术链接。</p>
                 )}
               </div>
             </div>
           </div>
-        )}
-      </section>
 
-      {optimizedContent && (
-        <section className="bg-indigo-50 p-8 rounded-2xl shadow-lg border border-indigo-200 animate-fade-in-up mt-8">
-          <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
-            <h3 className="text-xl font-bold text-indigo-900">AI 建议的交底补强方案</h3>
-            <div className="flex gap-3">
-              <button onClick={handleAcceptOptimization} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-semibold shadow-md transition-all">
-                采纳并写入交底摘要
-              </button>
-              <button onClick={() => setOptimizedContent(null)} className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg font-semibold shadow-sm transition-all">
-                忽略
-              </button>
+          {/* 模态底部操作 */}
+          <div className="flex items-center justify-between px-6 py-4 border-t border-slate-100 bg-slate-50 rounded-b-2xl">
+            <button
+              type="button"
+              onClick={() => setIsSearchModalOpen(false)}
+              className="text-sm text-slate-500 hover:text-slate-800 font-medium"
+            >
+              关闭报告
+            </button>
+            <button
+              type="button"
+              onClick={() => { setIsSearchModalOpen(false); handleProceedToDraft(); }}
+              disabled={isPreparingDraft}
+              className="flex items-center gap-2 px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold rounded-xl disabled:opacity-50 transition-colors"
+            >
+              {isPreparingDraft ? '准备中…' : '进入专利起草'}
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* 固定底部操作栏：始终可见，无需滚动到页面底部 */}
+    <div className="fixed bottom-0 left-64 right-0 z-30 bg-white/95 backdrop-blur-sm border-t border-slate-200 shadow-[0_-2px_12px_rgba(0,0,0,0.08)]">
+      <div className="max-w-7xl mx-auto px-8 py-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-slate-500 hidden sm:inline">交底完整度</span>
+          <div className="flex items-center gap-2">
+            <div className="w-24 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400 rounded-full transition-all"
+                style={{ width: `${Math.max(4, draftReadiness)}%` }}
+              />
             </div>
+            <span className="text-sm font-bold text-slate-800">{draftReadiness}%</span>
           </div>
-          <div className="bg-white p-6 rounded-xl border border-indigo-100 max-h-[500px] overflow-y-auto">
-            <div className="text-slate-700 leading-relaxed prose prose-sm max-w-none prose-indigo" dangerouslySetInnerHTML={{ __html: optimizedContent }} />
-          </div>
-        </section>
-      )}
+          {draftReadiness >= 60 ? (
+            <span className="text-xs text-emerald-600 font-medium hidden md:inline">可进入起草</span>
+          ) : (
+            <span className="text-xs text-amber-500 hidden md:inline">建议先补齐关键字段</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {report && (
+            <button
+              type="button"
+              onClick={() => setIsSearchModalOpen(true)}
+              className="px-4 py-2 rounded-lg bg-white border border-slate-300 text-slate-600 text-sm font-semibold hover:bg-slate-50 flex items-center gap-1.5"
+            >
+              <svg className="w-3.5 h-3.5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              查看检索报告
+            </button>
+          )}
+          <button
+            onClick={handleSearch}
+            disabled={isSearching || isPreparingDraft || isOptimizing}
+            className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            {isSearching ? '检索中…' : '新颖性检索'}
+          </button>
+          <button
+            onClick={handleProceedToDraft}
+            disabled={isPreparingDraft}
+            className="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 disabled:opacity-50 flex items-center gap-1.5"
+          >
+            {isPreparingDraft ? '准备中…' : '进入专利起草'}
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        </div>
+      </div>
     </div>
+    </>
   );
 };
 

@@ -156,6 +156,7 @@ export interface PatentData {
   inventionContent: string;
   descriptionOfDrawings?: string;
   drawings?: string[];
+  mermaidDiagrams?: string[];   // Mermaid diagram code, one per figure
   detailedDescription?: string;
   claims?: string;
   abstract?: string;

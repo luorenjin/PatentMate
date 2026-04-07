@@ -1,10 +1,12 @@
 
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { AppView, PatentData, ReviewResult, ReviewIssue } from '../types';
-import { refineText, regenerateClaimStrategyFromReview, runFinalPatentReview } from '../services/aiService';
+import { refineText, regenerateClaimStrategyFromReview, runFinalPatentReview, generateMermaidDiagrams } from '../services/aiService';
+import MermaidRenderer from './MermaidRenderer';
 import { renderMarkdown } from '../services/markdownService';
 import { RichTextEditor } from './RichTextEditor';
 import { exportToDocx, exportToPdf, downloadBlob } from '../services/exportService';
+import { savePatentToStorage } from '../services/storageService';
 
 interface EditorProps {
   patentData: PatentData;
@@ -19,6 +21,40 @@ const stripHtml = (html?: string) => {
     const tmp = document.createElement('DIV');
     tmp.innerHTML = html || '';
     return tmp.textContent || tmp.innerText || '';
+};
+
+// Smart HTML → plain text that preserves ordered/unordered list numbering.
+// Required because AI content is stored as rendered HTML (<ol><li>…</li></ol>),
+// and a naive stripHtml() would drop the "1. 2. 3." numbering needed for
+// patent format validation and readable AI prompts.
+const htmlToPlainText = (html?: string): string => {
+    if (!html) return '';
+    let processed = html;
+    // Convert ordered list items to "N. text" before stripping tags
+    processed = processed.replace(/<ol[^>]*>([\/\s\S]*?)<\/ol>/gi, (_m, inner) => {
+        let n = 1;
+        return inner.replace(/<li[^>]*>([\/\s\S]*?)<\/li>/gi, (_li: string, content: string) => {
+            const num = n++;
+            // Strip any inner tags from the li content for readability
+            const tmp = document.createElement('DIV');
+            tmp.innerHTML = content;
+            return `\n${num}. ${tmp.textContent || tmp.innerText || ''}\n`;
+        });
+    });
+    // Convert unordered list items to "- text"
+    processed = processed.replace(/<ul[^>]*>([\/\s\S]*?)<\/ul>/gi, (_m, inner) => {
+        return inner.replace(/<li[^>]*>([\/\s\S]*?)<\/li>/gi, (_li: string, content: string) => {
+            const tmp = document.createElement('DIV');
+            tmp.innerHTML = content;
+            return `\n- ${tmp.textContent || tmp.innerText || ''}\n`;
+        });
+    });
+    // Block-level elements add newlines
+    processed = processed.replace(/<\/(p|div|h[1-6])>/gi, '\n');
+    processed = processed.replace(/<br\s*\/?>/gi, '\n');
+    const tmp = document.createElement('DIV');
+    tmp.innerHTML = processed;
+    return (tmp.textContent || tmp.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
 };
 
 // Helper to auto-number paragraphs for Description sections [0001], [0002]...
@@ -66,8 +102,8 @@ const formatTextWithNumbering = (content?: string, startCount: number = 1): { ht
             const numStr = String(currentCount).padStart(4, '0');
             currentCount++;
             return (
-                <div key={index} className="mb-2 text-justify leading-relaxed text-base indent-8 relative">
-                    <span className="font-mono text-sm text-slate-500 absolute -left-2 select-none w-10 text-right">[{numStr}]</span>
+                <div key={index} className="mb-2 flex items-start gap-1 text-justify leading-relaxed text-base">
+                    <span className="font-mono text-sm text-slate-500 select-none shrink-0 w-14">[{numStr}]</span>
                     <span dangerouslySetInnerHTML={{ __html: block.content }} />
                 </div>
             );
@@ -76,12 +112,13 @@ const formatTextWithNumbering = (content?: string, startCount: number = 1): { ht
         }
     });
 
-    return { html: <div className="pl-10">{elements}</div>, nextCount: currentCount };
+    return { html: <div>{elements}</div>, nextCount: currentCount };
 };
 
 const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, onSave, onBack }) => {
   const [selectedSection, setSelectedSection] = useState<keyof PatentData>('claims');
   const [processingType, setProcessingType] = useState<string | null>(null);
+    const [writeBackNotice, setWriteBackNotice] = useState<{ tone: 'success' | 'info'; message: string } | null>(null);
   
   // Review State
   const [isReviewing, setIsReviewing] = useState(false);
@@ -104,15 +141,109 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
   // Export State
   const [isExporting, setIsExporting] = useState(false);
 
+  // Mermaid diagram generation state
+  const [isGeneratingDiagrams, setIsGeneratingDiagrams] = useState(false);
+  const [zoomedDiagramIdx, setZoomedDiagramIdx] = useState<number | null>(null);
+  // Cache raw SVG strings from successfully rendered list items, keyed by diagram index.
+  // The zoom modal reuses these directly instead of calling mermaid.render() again,
+  // which avoids React StrictMode double-effect / ID-collision issues.
+  const [diagramSvgCache, setDiagramSvgCache] = useState<Record<number, string>>({});
+
+  // Clear SVG cache when the diagram list changes (regenerated or deleted)
+  useEffect(() => {
+    setDiagramSvgCache({});
+  }, [patentData.mermaidDiagrams]);
+
+    useEffect(() => {
+            if (!writeBackNotice) return;
+            const timeoutId = window.setTimeout(() => setWriteBackNotice(null), 3000);
+            return () => window.clearTimeout(timeoutId);
+    }, [writeBackNotice]);
+
   const appendTextBlock = (current: string, title: string, content: string) => {
       const block = `${title}\n- ${content}`;
       if (current.includes(content)) return current;
       return [current, block].filter(Boolean).join('\n\n');
   };
 
-  const mergeStrategyRisk = (risk: string) => {
-      if (patentData.strategyRisks.includes(risk)) return;
-      updatePatentData('strategyRisks', [...patentData.strategyRisks, risk]);
+  const mergeStrategyRisks = (currentRisks: string[], newRisks: string[]) => {
+      return Array.from(new Set([...currentRisks, ...newRisks.filter(Boolean)]));
+  };
+
+  const buildWriteBackPatentData = (basePatentData: PatentData, issues: ReviewIssue[], target: 'strategy' | 'disclosure') => {
+      const nextPatentData = {
+          ...basePatentData,
+          claimStrategy: basePatentData.claimStrategy,
+          disclosureSummary: basePatentData.disclosureSummary,
+          strategyRisks: [...basePatentData.strategyRisks],
+          claimStrategyConfirmed: basePatentData.claimStrategyConfirmed,
+      };
+
+      issues.forEach((issue) => {
+          if (target === 'strategy') {
+              nextPatentData.claimStrategy = appendTextBlock(
+                  nextPatentData.claimStrategy,
+                  `【审查回写 - ${getSectionLabel(issue.section)}】`,
+                  `${issue.issue}；修改方向：${stripHtml(renderMarkdown(issue.suggestion))}`,
+              );
+              nextPatentData.claimStrategyConfirmed = false;
+          } else {
+              nextPatentData.disclosureSummary = appendTextBlock(
+                  nextPatentData.disclosureSummary,
+                  `【审查回写 - ${getSectionLabel(issue.section)}】`,
+                  issue.issue,
+              );
+          }
+      });
+
+      nextPatentData.strategyRisks = mergeStrategyRisks(
+          nextPatentData.strategyRisks,
+          issues.map((issue) => issue.issue),
+      );
+
+      return nextPatentData;
+  };
+
+  const applyWriteBackPatentData = (nextPatentData: PatentData, target: 'strategy' | 'disclosure') => {
+      if (target === 'strategy') {
+          updatePatentData('claimStrategy', nextPatentData.claimStrategy);
+          updatePatentData('claimStrategyConfirmed', nextPatentData.claimStrategyConfirmed);
+      } else {
+          updatePatentData('disclosureSummary', nextPatentData.disclosureSummary);
+      }
+
+      updatePatentData('strategyRisks', nextPatentData.strategyRisks);
+  };
+
+  const hasWriteBackChanges = (basePatentData: PatentData, nextPatentData: PatentData, target: 'strategy' | 'disclosure') => {
+      const risksChanged = JSON.stringify(basePatentData.strategyRisks) !== JSON.stringify(nextPatentData.strategyRisks);
+
+      if (target === 'strategy') {
+          return (
+              basePatentData.claimStrategy !== nextPatentData.claimStrategy ||
+              basePatentData.claimStrategyConfirmed !== nextPatentData.claimStrategyConfirmed ||
+              risksChanged
+          );
+      }
+
+      return basePatentData.disclosureSummary !== nextPatentData.disclosureSummary || risksChanged;
+  };
+
+  const commitWriteBack = (
+      basePatentData: PatentData,
+      nextPatentData: PatentData,
+      target: 'strategy' | 'disclosure',
+      successMessage: string,
+      noChangeMessage: string,
+  ) => {
+      if (!hasWriteBackChanges(basePatentData, nextPatentData, target)) {
+          setWriteBackNotice({ tone: 'info', message: noChangeMessage });
+          return;
+      }
+
+      applyWriteBackPatentData(nextPatentData, target);
+      savePatentToStorage(nextPatentData);
+      setWriteBackNotice({ tone: 'success', message: successMessage });
   };
 
   // Validation Checker
@@ -120,7 +251,8 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
       const issues: typeof validationIssues = [];
 
       // Abstract validation: 200-300 characters
-      const abstractText = stripHtml(patentData.abstract);
+      // Use htmlToPlainText so length check counts actual characters, not HTML tags
+      const abstractText = htmlToPlainText(patentData.abstract);
       if (!abstractText) {
           issues.push({ section: '摘要', issue: '摘要为空', severity: 'error' });
       } else if (abstractText.length < 50) {
@@ -130,7 +262,9 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
       }
 
       // Claims validation
-      const claimsText = stripHtml(patentData.claims);
+      // AI output is stored as HTML <ol><li>…</li></ol>; use htmlToPlainText to
+      // restore "1. 2. 3." numbering before running the regex check.
+      const claimsText = htmlToPlainText(patentData.claims);
       if (!claimsText) {
           issues.push({ section: '权利要求书', issue: '权利要求书为空', severity: 'error' });
       } else if (!/^1\./m.test(claimsText)) {
@@ -138,10 +272,10 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
       }
 
       // Description validation
-      const hasBackground = stripHtml(patentData.backgroundArt).length > 20;
-      const hasPurpose = stripHtml(patentData.inventionContent).length > 20;
-      const hasSolution = stripHtml(patentData.inventionContent).includes('解决') || stripHtml(patentData.inventionContent).includes('方案');
-      const hasEmbodiments = stripHtml(patentData.detailedDescription).length > 50;
+      const hasBackground = htmlToPlainText(patentData.backgroundArt).length > 20;
+      const hasPurpose = htmlToPlainText(patentData.inventionContent).length > 20;
+      const hasSolution = htmlToPlainText(patentData.inventionContent).includes('解决') || htmlToPlainText(patentData.inventionContent).includes('方案');
+      const hasEmbodiments = htmlToPlainText(patentData.detailedDescription).length > 50;
 
       if (!hasBackground) {
           issues.push({ section: '说明书', issue: '背景技术描述不足', severity: 'warning' });
@@ -219,35 +353,45 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
   };
 
   const handleWriteBackToStrategy = (issue: ReviewIssue) => {
-      const strategyUpdate = appendTextBlock(
-          patentData.claimStrategy,
-          `【审查回写 - ${getSectionLabel(issue.section)}】`,
-          `${issue.issue}；修改方向：${stripHtml(renderMarkdown(issue.suggestion))}`,
+      const nextPatentData = buildWriteBackPatentData(patentData, [issue], 'strategy');
+      commitWriteBack(
+          patentData,
+          nextPatentData,
+          'strategy',
+          `已将 1 条问题回写到保护策略，并同步保存。`,
+          '这条问题已经回写到保护策略，无需重复写入。',
       );
-      updatePatentData('claimStrategy', strategyUpdate);
-      updatePatentData('claimStrategyConfirmed', false);
-      mergeStrategyRisk(issue.issue);
   };
 
   const handleWriteBackToDisclosure = (issue: ReviewIssue) => {
-      const disclosureUpdate = appendTextBlock(
-          patentData.disclosureSummary,
-          `【审查回写 - ${getSectionLabel(issue.section)}】`,
-          issue.issue,
+      const nextPatentData = buildWriteBackPatentData(patentData, [issue], 'disclosure');
+      commitWriteBack(
+          patentData,
+          nextPatentData,
+          'disclosure',
+          `已将 1 条问题回写到交底摘要，并同步保存。`,
+          '这条问题已经回写到交底摘要，无需重复写入。',
       );
-      updatePatentData('disclosureSummary', disclosureUpdate);
-      mergeStrategyRisk(issue.issue);
   };
 
   const handleWriteBackAllIssues = (target: 'strategy' | 'disclosure') => {
-      if (!reviewResult?.detailedIssues || reviewResult.detailedIssues.length === 0) return;
-      reviewResult.detailedIssues.forEach((issue) => {
-          if (target === 'strategy') {
-              handleWriteBackToStrategy(issue);
-          } else {
-              handleWriteBackToDisclosure(issue);
-          }
-      });
+      if (!reviewResult?.detailedIssues || reviewResult.detailedIssues.length === 0) {
+          setWriteBackNotice({ tone: 'info', message: '当前没有可回写的问题。' });
+          return;
+      }
+
+      const nextPatentData = buildWriteBackPatentData(patentData, reviewResult.detailedIssues, target);
+      commitWriteBack(
+          patentData,
+          nextPatentData,
+          target,
+          target === 'strategy'
+              ? `已将 ${reviewResult.detailedIssues.length} 条问题回写到保护策略，并同步保存。`
+              : `已将 ${reviewResult.detailedIssues.length} 条问题回写到交底摘要，并同步保存。`,
+          target === 'strategy'
+              ? '这些问题已经全部回写到保护策略，无需重复写入。'
+              : '这些问题已经全部回写到交底摘要，无需重复写入。',
+      );
   };
 
   const handleRegenerateStrategyAfterWriteBack = async () => {
@@ -268,8 +412,8 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
     const currentContent = patentData[selectedSection];
     if (typeof currentContent !== 'string' || !currentContent) return;
 
-    // 1. Strip HTML to send clean text to AI
-    const plainText = stripHtml(currentContent);
+    // Use htmlToPlainText so AI receives clean numbered text (claims: "1. … 2. …")
+    const plainText = htmlToPlainText(currentContent);
 
     setProcessingType(type);
     try {
@@ -282,10 +426,40 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
     }
   };
 
+  const handleGenerateDiagrams = async () => {
+    const descText = stripHtml(patentData.descriptionOfDrawings);
+    const inventionText = stripHtml(patentData.inventionContent);
+    const embodimentText = stripHtml(patentData.detailedDescription);
+    if (!descText) {
+      alert('请先填写【附图说明】章节，描述每幅图的内容（如：图1为系统整体架构图），AI 将严格按照附图说明逐图生成示意图。');
+      return;
+    }
+    if (!inventionText) {
+      alert('请先填写【发明内容】，以便 AI 理解技术方案并生成准确的示意图。');
+      return;
+    }
+    setIsGeneratingDiagrams(true);
+    try {
+      const diagrams = await generateMermaidDiagrams(
+        patentData.title || '',
+        inventionText,
+        embodimentText,
+        descText,
+      );
+      if (diagrams.length > 0) {
+        updatePatentData('mermaidDiagrams', diagrams);
+      }
+    } catch (err) {
+      console.error('Failed to generate diagrams:', err);
+    } finally {
+      setIsGeneratingDiagrams(false);
+    }
+  };
+
   const handleExportDocx = async () => {
     setIsExporting(true);
     try {
-        const blob = await exportToDocx(patentData);
+        const blob = await exportToDocx(patentData, diagramSvgCache);
         downloadBlob(blob, `${patentData.title || 'patent'}_申请书.docx`);
     } catch (err) {
         console.error('DOCX export failed:', err);
@@ -298,8 +472,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
   const handleExportPdf = async () => {
     setIsExporting(true);
     try {
-        const blob = await exportToPdf(patentData);
-        downloadBlob(blob, `${patentData.title || 'patent'}_申请书.pdf`);
+        await exportToPdf(patentData, diagramSvgCache);
     } catch (err) {
         console.error('PDF export failed:', err);
         alert('导出失败，请重试');
@@ -334,11 +507,13 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
       setReviewResult(null);
       setFixedIssueIndices([]); 
       
-      // Pass a clean copy of data to review to avoid HTML tag noise in prompt
+      // Pass a clean copy of data to review to avoid HTML tag noise in prompt.
+      // Use htmlToPlainText (not plain stripHtml) so claims keep their "1. 2." numbering
+      // which is essential for the AI to understand the claim structure.
       const cleanData = { ...patentData };
       (Object.keys(cleanData) as Array<keyof PatentData>).forEach(key => {
           if (typeof cleanData[key] === 'string') {
-              (cleanData as any)[key] = stripHtml(cleanData[key] as string);
+              (cleanData as any)[key] = htmlToPlainText(cleanData[key] as string);
           }
       });
 
@@ -402,85 +577,169 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
   const PreviewContent = useMemo(() => {
       if (!showPreview) return null;
 
+      // Dynamic labels based on patent type
+      const isInvention = patentData.patentType === 'invention';
+      const docTypeLabel = isInvention ? '发明专利申请' : '实用新型专利申请';
+      const nameLabel = isInvention ? '发明名称' : '实用新型名称';
+      const inventionSectionLabel = isInvention ? '发明内容' : '实用新型内容';
+
       let pCount = 1;
       const renderDescriptionSection = (title: string, content?: string) => {
           const res = formatTextWithNumbering(content, pCount);
           pCount = res.nextCount;
           return (
-              <div className="mb-6">
-                  <h4 className="font-bold text-slate-900 mb-2 text-base text-center">{title}</h4>
-                  <div className="text-base leading-loose text-slate-800 font-serif">{res.html}</div>
+              <div className="mb-5">
+                  <h4 className="font-bold text-base mb-2">{title}</h4>
+                  <div className="text-base leading-8 text-justify">{res.html}</div>
               </div>
           );
       };
 
+      const pageStyle: React.CSSProperties = {
+          padding: '20mm 25mm',
+          minHeight: '297mm',
+          boxSizing: 'border-box',
+          fontFamily: "'SimSun', 'STSong', serif",
+          fontSize: '14px',
+          lineHeight: '1.8',
+      };
+
       return (
-          <div className="font-serif text-black max-w-[210mm] mx-auto bg-white min-h-screen">
-              {/* 1. Cover Page Mockup */}
-              <div className="page-break-after pb-10 border-b-2 border-dashed border-slate-200 mb-10 print:border-none">
-                  <div className="text-center border-b-2 border-black pb-4 mb-6 relative">
-                      <div className="text-sm font-bold absolute left-0 top-0">(19)中华人民共和国国家知识产权局</div>
-                      <h1 className="text-2xl font-bold tracking-widest mt-12">(12) 实用新型专利</h1>
+          <div className="text-black max-w-[210mm] mx-auto space-y-6">
+
+              {/* ---- 第1页：摘要页（封面） ---- */}
+              <div className="bg-white shadow-md" style={pageStyle}>
+                  {/* CNIPA 页眉：两端对齐，无绝对定位 */}
+                  <div className="flex justify-between items-center border-b-2 border-black pb-3 mb-5 text-sm font-bold">
+                      <span>(19) 中华人民共和国国家知识产权局</span>
+                      <span>(12) {docTypeLabel}</span>
                   </div>
-                  
-                  <div className="grid grid-cols-[140px_1fr] gap-y-6 text-sm mb-8">
-                      <div className="font-bold text-right pr-6">(54) 实用新型名称</div>
-                      <div className="font-bold text-lg">{patentData.title || "未命名"}</div>
-                      
-                      <div className="font-bold text-right pr-6">(57) 摘要</div>
-                      <div className="text-justify leading-relaxed">
-                          {/* Render HTML safely in abstract preview */}
-                          <div dangerouslySetInnerHTML={{ __html: patentData.abstract || "暂无摘要" }} />
-                      </div>
+
+                  {/* 著录项目 */}
+                  <table className="w-full text-sm mb-5" style={{ borderCollapse: 'collapse' }}>
+                      <tbody>
+                          <tr>
+                              <td className="pr-5 py-2 text-slate-600 font-semibold whitespace-nowrap align-top w-40">(54) {nameLabel}</td>
+                              <td className="py-2 font-bold text-base align-top">{patentData.title || '未命名'}</td>
+                          </tr>
+                          {patentData.selectedTechnicalField && (
+                              <tr>
+                                  <td className="pr-5 py-2 text-slate-600 font-semibold whitespace-nowrap align-top">(51) 分类号</td>
+                                  <td className="py-2 align-top">{patentData.selectedTechnicalField}</td>
+                              </tr>
+                          )}
+                          <tr>
+                              <td className="pr-5 py-2 text-slate-600 font-semibold whitespace-nowrap align-top">(22) 申请日</td>
+                              <td className="py-2 align-top">
+                                  {new Date(patentData.createdAt).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })}
+                              </td>
+                          </tr>
+                      </tbody>
+                  </table>
+
+                  {/* 摘要 */}
+                  <div className="border-t border-slate-200 pt-4 mb-4">
+                      <div className="text-sm font-bold mb-2">(57) 摘　要</div>
+                      <div className="text-sm leading-7 text-justify"
+                          dangerouslySetInnerHTML={{ __html: patentData.abstract || '暂无摘要' }}
+                      />
                   </div>
-                  
-                  {(patentData.drawings && patentData.drawings.length > 0) && (
-                      <div className="flex justify-center mt-12 p-4">
-                           <img src={`data:image/jpeg;base64,${patentData.drawings[0]}`} className="max-h-72 object-contain border border-slate-100" alt="Abstract Fig" />
+
+                  {/* 摘要附图 */}
+                  {patentData.drawings && patentData.drawings.length > 0 && (
+                      <div className="flex flex-col items-center mt-6">
+                          <img
+                              src={`data:image/jpeg;base64,${patentData.drawings[0]}`}
+                              className="max-h-60 object-contain"
+                              alt="摘要附图"
+                          />
+                          <div className="text-xs text-slate-500 mt-2">图 1</div>
                       </div>
                   )}
               </div>
 
-              {/* 2. Claims */}
-              <div className="page-break-after min-h-[297mm] relative p-12 pt-16 bg-white">
-                  <div className="absolute top-8 right-12 text-xs text-slate-500">权利要求书 1/1 页</div>
-                  <h2 className="text-xl font-bold text-center mb-10 tracking-[0.5em]">权利要求书</h2>
-                  <div className="text-base leading-[2.5] text-justify font-serif">
-                      <div dangerouslySetInnerHTML={{ __html: patentData.claims || "暂无权利要求" }} />
+              {/* ---- 第2页+：权利要求书 ---- */}
+              <div className="bg-white shadow-md" style={pageStyle}>
+                  <div className="text-xs text-right text-slate-400 mb-4">权利要求书 第1页</div>
+                  <h2 className="text-lg font-bold text-center mb-8 tracking-widest">权　利　要　求　书</h2>
+                  <div className="text-base leading-8 text-justify"
+                      dangerouslySetInnerHTML={{ __html: patentData.claims || '<p>暂无权利要求</p>' }}
+                  />
+              </div>
+
+              {/* ---- 第3页+：说明书 ---- */}
+              <div className="bg-white shadow-md" style={pageStyle}>
+                  <div className="text-xs text-right text-slate-400 mb-4">说明书 第1页</div>
+                  <h2 className="text-lg font-bold text-center mb-6 tracking-widest">说　　明　　书</h2>
+                  <div className="text-base font-bold text-center mb-8">{patentData.title || '未命名'}</div>
+                  <div className="text-base text-justify">
+                      {renderDescriptionSection('技术领域', patentData.technicalField)}
+                      {renderDescriptionSection('背景技术', patentData.backgroundArt)}
+                      {renderDescriptionSection(inventionSectionLabel, patentData.inventionContent)}
+                      {patentData.descriptionOfDrawings && renderDescriptionSection('附图说明', patentData.descriptionOfDrawings)}
+                      {renderDescriptionSection('具体实施方式', patentData.detailedDescription)}
                   </div>
               </div>
 
-              {/* 3. Description */}
-              <div className="page-break-after min-h-[297mm] relative p-12 pt-16 bg-white mt-4">
-                   <div className="absolute top-8 right-12 text-xs text-slate-500">说明书 1/X 页</div>
-                   <h2 className="text-xl font-bold text-center mb-10 tracking-[0.5em]">说明书</h2>
-                   
-                   <div className="text-lg font-bold text-center mb-8">{patentData.title}</div>
+              {/* ---- 第4页+：说明书附图 ---- */}
+              {((patentData.drawings && patentData.drawings.length > 0) || (patentData.mermaidDiagrams && patentData.mermaidDiagrams.length > 0)) && (
+                  <div className="bg-white shadow-md" style={pageStyle}>
+                      <div className="text-xs text-right text-slate-400 mb-4">说明书附图 第1页</div>
+                      <h2 className="text-lg font-bold text-center mb-8 tracking-widest">说　明　书　附　图</h2>
 
-                   <div className="text-justify font-serif">
-                       {renderDescriptionSection("技术领域", patentData.technicalField)}
-                       {renderDescriptionSection("背景技术", patentData.backgroundArt)}
-                       {renderDescriptionSection("发明内容", patentData.inventionContent)}
-                       {renderDescriptionSection("附图说明", patentData.descriptionOfDrawings)}
-                       {renderDescriptionSection("具体实施方式", patentData.detailedDescription)}
-                   </div>
-              </div>
-
-              {/* 4. Drawings */}
-              {(patentData.drawings && patentData.drawings.length > 0) && (
-                  <div className="page-break-after min-h-[297mm] relative p-12 pt-16 bg-white mt-4">
-                      <div className="absolute top-8 right-12 text-xs text-slate-500">说明书附图 1/1 页</div>
-                      <h2 className="text-xl font-bold text-center mb-12 tracking-[0.5em]">说明书附图</h2>
-                      <div className="space-y-16 flex flex-col items-center">
-                          {patentData.drawings.map((img, idx) => (
-                              <div key={idx} className="flex flex-col items-center w-full">
-                                  <img src={`data:image/jpeg;base64,${img}`} className="max-w-4/5 max-h-150 object-contain" alt={`Figure ${idx+1}`} />
-                                  <div className="mt-6 font-bold text-lg">图 {idx + 1}</div>
+                      {/* 2-column grid for figures */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px 20px', alignItems: 'start' }}>
+                          {/* Mermaid 生成的示意图 */}
+                          {patentData.mermaidDiagrams && patentData.mermaidDiagrams.map((code, idx) => (
+                              <div key={`mermaid-${idx}`} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                                  <div style={{
+                                      border: '1px solid #ccc',
+                                      borderRadius: '2px',
+                                      padding: '8px',
+                                      background: '#fff',
+                                      width: '100%',
+                                      boxSizing: 'border-box',
+                                  }}>
+                                      <MermaidRenderer
+                                          code={code}
+                                          id={`preview-${idx}`}
+                                          maxHeight={200}
+                                      />
+                                  </div>
+                                  <div style={{ marginTop: '6px', fontSize: '12px', fontWeight: 'bold', textAlign: 'center' }}>
+                                      图 {idx + 1}
+                                  </div>
                               </div>
                           ))}
+                          {/* 用户上传的实体图片 */}
+                          {patentData.drawings && patentData.drawings.map((img, idx) => {
+                              const figNum = (patentData.mermaidDiagrams?.length || 0) + idx + 1;
+                              return (
+                                  <div key={`img-${idx}`} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                                      <div style={{
+                                          border: '1px solid #ccc',
+                                          borderRadius: '2px',
+                                          padding: '8px',
+                                          background: '#fff',
+                                          width: '100%',
+                                          boxSizing: 'border-box',
+                                      }}>
+                                          <img
+                                              src={`data:image/jpeg;base64,${img}`}
+                                              style={{ maxWidth: '100%', maxHeight: '200px', objectFit: 'contain', display: 'block', margin: '0 auto' }}
+                                              alt={`图${figNum}`}
+                                          />
+                                      </div>
+                                      <div style={{ marginTop: '6px', fontSize: '12px', fontWeight: 'bold', textAlign: 'center' }}>
+                                          图 {figNum}
+                                      </div>
+                                  </div>
+                              );
+                          })}
                       </div>
                   </div>
               )}
+
           </div>
       );
   }, [showPreview, patentData]);
@@ -622,6 +881,17 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                     </button>
 
                     <button
+                    onClick={handleGenerateDiagrams}
+                    disabled={isGeneratingDiagrams}
+                    className="w-full py-2.5 px-4 rounded-lg bg-violet-50 text-violet-600 hover:bg-violet-100 border border-violet-100 flex items-center gap-2 transition-all disabled:opacity-50 text-sm"
+                    >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 0v10m0-10a2 2 0 012 2h2a2 2 0 002-2V7" />
+                    </svg>
+                    {isGeneratingDiagrams ? 'AI 生成示意图...' : '生成 Mermaid 示意图'}
+                    </button>
+
+                    <button
                     onClick={() => handleRefine('fix_legal')}
                     disabled={!!processingType || selectedSection === 'drawings'}
                     className="w-full py-2.5 px-4 rounded-lg bg-amber-50 text-amber-600 hover:bg-amber-100 border border-amber-100 flex items-center gap-2 transition-all disabled:opacity-50 text-sm"
@@ -633,6 +903,68 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                     </button>
                 </div>
             </div>
+
+            {/* Mermaid Diagrams Preview Panel */}
+            {patentData.mermaidDiagrams && patentData.mermaidDiagrams.length > 0 && (
+                <div className="bg-white rounded-xl shadow-sm border border-violet-200 p-4 shrink-0">
+                    <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                            <svg className="w-4 h-4 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 0v10m0-10a2 2 0 012 2h2a2 2 0 002-2V7" />
+                            </svg>
+                            生成的示意图
+                        </h3>
+                        <span className="text-xs bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full font-medium">
+                            {patentData.mermaidDiagrams.length} 张
+                        </span>
+                    </div>
+                    <div className="space-y-3">
+                        {patentData.mermaidDiagrams.map((code, idx) => (
+                            <div key={idx} className="border border-slate-200 rounded-lg overflow-hidden">
+                                <div className="flex items-center justify-between px-3 py-1.5 bg-slate-50 border-b border-slate-200">
+                                    <span className="text-xs font-semibold text-slate-500">图 {idx + 1}</span>
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            onClick={() => setZoomedDiagramIdx(idx)}
+                                            className="text-xs text-violet-400 hover:text-violet-600 transition-colors"
+                                            title="放大查看"
+                                        >
+                                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                                            </svg>
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                const updated = patentData.mermaidDiagrams!.filter((_, i) => i !== idx);
+                                                updatePatentData('mermaidDiagrams', updated);
+                                            }}
+                                            className="text-xs text-red-400 hover:text-red-600 transition-colors"
+                                            title="删除此图"
+                                        >
+                                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div
+                                    className="p-2 bg-white cursor-zoom-in"
+                                    onClick={() => setZoomedDiagramIdx(idx)}
+                                    title="点击放大查看"
+                                >
+                                    <MermaidRenderer
+                                        code={code}
+                                        id={`editor-preview-${idx}`}
+                                        maxHeight={180}
+                                        className="w-full"
+                                        onSvgReady={(svg) => setDiagramSvgCache(prev => ({ ...prev, [idx]: svg }))}
+                                    />
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* Format Validation Panel */}
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 shrink-0">
@@ -724,6 +1056,18 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                                 回写全部问题到交底摘要
                             </button>
                          </div>
+
+                         {writeBackNotice && (
+                             <div
+                                 className={`rounded-lg border px-3 py-2 text-xs font-medium leading-relaxed ${
+                                     writeBackNotice.tone === 'success'
+                                         ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                         : 'border-slate-200 bg-slate-50 text-slate-600'
+                                 }`}
+                             >
+                                 {writeBackNotice.message}
+                             </div>
+                         )}
 
                          {reviewResult.detailedIssues && Array.isArray(reviewResult.detailedIssues) && reviewResult.detailedIssues.length > 0 && (
                              <div className="space-y-3">
@@ -835,7 +1179,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
             <h3 className="font-bold text-slate-700">
               编辑内容: <span className="text-blue-600">{getSectionLabel(selectedSection)}</span>
             </h3>
-            <span className="text-xs text-slate-400">支持 Markdown 和 LaTeX 公式</span>
+            <span className="text-xs text-slate-400">富文本编辑器，支持 LaTeX 公式（Σ）</span>
           </div>
           {selectedSection === 'drawings' ? (
               <div className="flex-1 p-8 flex items-center justify-center text-slate-400">
@@ -845,12 +1189,68 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
             <RichTextEditor
                 value={(patentData[selectedSection] as string) || ''}
                 onChange={(newHtml) => updatePatentData(selectedSection, newHtml)}
+                format="html"
                 className="flex-1 border-0 rounded-none h-full"
                 placeholder="在此处编辑..."
             />
           )}
         </div>
       </div>
+
+      {/* MERMAID ZOOM MODAL */}
+      {zoomedDiagramIdx !== null && patentData.mermaidDiagrams && patentData.mermaidDiagrams[zoomedDiagramIdx] && (
+          <div
+              className="fixed inset-0 z-[200] bg-black/75 backdrop-blur-sm flex items-center justify-center p-6"
+              onClick={() => setZoomedDiagramIdx(null)}
+          >
+              <div
+                  className="bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+                  style={{ maxWidth: '90vw', maxHeight: '90vh', minWidth: '400px' }}
+                  onClick={(e) => e.stopPropagation()}
+              >
+                  <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200 bg-slate-50">
+                      <span className="font-bold text-slate-700">
+                          图 {zoomedDiagramIdx + 1}
+                          <span className="ml-2 text-xs font-normal text-slate-400">点击外部区域关闭</span>
+                      </span>
+                      <button
+                          onClick={() => setZoomedDiagramIdx(null)}
+                          className="text-slate-400 hover:text-slate-700 transition-colors"
+                      >
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                      </button>
+                  </div>
+                  <div className="p-6 overflow-auto flex items-center justify-center" style={{ maxHeight: 'calc(90vh - 60px)', minHeight: '200px' }}>
+                      {diagramSvgCache[zoomedDiagramIdx] ? (
+                          /* Reuse the already-rendered SVG from the list — avoids re-calling
+                             mermaid.render() which can fail in React StrictMode (double effect). */
+                          <div
+                              ref={(el) => {
+                                  if (!el || !diagramSvgCache[zoomedDiagramIdx!]) return;
+                                  el.innerHTML = diagramSvgCache[zoomedDiagramIdx!];
+                                  const svgEl = el.querySelector('svg');
+                                  if (svgEl) {
+                                      svgEl.removeAttribute('width');
+                                      svgEl.removeAttribute('height');
+                                      svgEl.style.maxWidth = '100%';
+                                      svgEl.style.width = '100%';
+                                      svgEl.style.height = 'auto';
+                                      svgEl.style.maxHeight = 'none';
+                                      svgEl.style.display = 'block';
+                                      svgEl.style.margin = '0 auto';
+                                  }
+                              }}
+                              style={{ width: '100%' }}
+                          />
+                      ) : (
+                          <div className="text-slate-400 text-sm animate-pulse">图表加载中，请稍候…</div>
+                      )}
+                  </div>
+              </div>
+          </div>
+      )}
 
       {/* PREVIEW MODAL */}
       {showPreview && (

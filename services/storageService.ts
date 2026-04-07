@@ -181,6 +181,7 @@ const normalizePatentData = (patent: Partial<PatentData>): PatentData => {
     inventionContent: patent.inventionContent || "",
     descriptionOfDrawings: patent.descriptionOfDrawings || "",
     drawings: normalizeStringArray(patent.drawings),
+    mermaidDiagrams: normalizeStringArray(patent.mermaidDiagrams),
     detailedDescription: patent.detailedDescription || "",
     claims: patent.claims || "",
     abstract: patent.abstract || "",
