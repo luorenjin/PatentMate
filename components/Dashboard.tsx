@@ -1,6 +1,21 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { PatentData, PatentStatus } from '../types';
+import { PatentData, PatentStatus, DraftingStage } from '../types';
 import { getPatents, deletePatentFromStorage } from '../services/storageService';
+
+// Maps drafting stage keys to display labels
+const STAGE_LABELS: Record<DraftingStage, string> = {
+    abstract: '摘要',
+    claims: '权利要求',
+    description: '说明书',
+    embodiment: '实施例',
+    drawings: '附图说明',
+};
+
+// Maps patent type values to display labels
+const PATENT_TYPE_LABELS: Record<string, string> = {
+    invention: '发明专利',
+    utility: '实用新型',
+};
 
 interface DashboardProps {
     onOpenPatent: (patent: PatentData) => void;
@@ -10,7 +25,7 @@ interface DashboardProps {
 const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
     const [patents, setPatents] = useState<PatentData[]>([]);
     const [deleteCandidateId, setDeleteCandidateId] = useState<string | null>(null);
-    const [activeFilter, setActiveFilter] = useState<'all' | 'pending_questions' | 'strategy' | 'review' | 'ready_to_draft'>('all');
+    const [activeFilter, setActiveFilter] = useState<'all' | 'in_disclosure' | 'in_drafting' | 'in_review' | 'completed'>('all');
 
     // Search, filter, and sort state
     const [searchQuery, setSearchQuery] = useState('');
@@ -20,21 +35,26 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
     const getBlockers = (patent: PatentData) => {
         const blockers: string[] = [];
 
-        if (patent.disclosurePendingQuestions.length > 0) {
-            blockers.push(`还有 ${patent.disclosurePendingQuestions.length} 个待追问问题`);
+        // New disclosure wizard flow
+        if (patent.disclosureData) {
+            const totalQuestions = patent.patentType === 'utility' ? 5 : 7;
+            const answeredCount = patent.disclosureData.answers.filter(a => a.answer.trim().length > 0).length;
+            if (answeredCount < totalQuestions) {
+                blockers.push(`交底问卷仅完成 ${answeredCount} / ${totalQuestions} 题`);
+            }
+            if (!patent.disclosureData.title?.trim()) {
+                blockers.push('尚未填写发明名称');
+            }
+        } else {
+            // Legacy NoveltySearch-based flow
+            if (!patent.technicalProblem?.trim()) {
+                blockers.push('技术问题还未明确');
+            }
+            if ((patent.technicalHighlights || []).length < 3) {
+                blockers.push('关键技术特征不足 3 条');
+            }
         }
-        if (patent.draftReadiness < 60) {
-            blockers.push('交底完整度未达到起草门槛');
-        }
-        if (!patent.technicalProblem.trim()) {
-            blockers.push('技术问题还未明确');
-        }
-        if (patent.technicalHighlights.length < 3) {
-            blockers.push('关键技术特征不足 3 条');
-        }
-        if (!patent.claimStrategyConfirmed && patent.status !== 'disclosure_collecting') {
-            blockers.push('保护策略尚未确认');
-        }
+
         if (patent.lastReviewScore > 0 && patent.lastReviewScore < 80) {
             blockers.push(`最近审查分数仅 ${patent.lastReviewScore} 分`);
         }
@@ -43,17 +63,17 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
     };
 
     const matchesFilter = (patent: PatentData) => {
-        if (activeFilter === 'pending_questions') {
-            return patent.disclosurePendingQuestions.length > 0;
+        if (activeFilter === 'in_disclosure') {
+            return patent.status === 'disclosure_collecting' || patent.status === 'disclosure_review';
         }
-        if (activeFilter === 'strategy') {
-            return !patent.claimStrategyConfirmed && patent.status !== 'disclosure_collecting';
+        if (activeFilter === 'in_drafting') {
+            return patent.status === 'drafting';
         }
-        if (activeFilter === 'review') {
-            return patent.lastReviewScore > 0 && patent.lastReviewScore < 80;
+        if (activeFilter === 'in_review') {
+            return patent.status === 'editing';
         }
-        if (activeFilter === 'ready_to_draft') {
-            return patent.draftReadiness >= 60;
+        if (activeFilter === 'completed') {
+            return patent.status === 'ready_to_submit';
         }
         return true;
     };
@@ -269,10 +289,10 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
             <section className="mb-6 flex flex-wrap gap-3">
                 {[
                     { key: 'all', label: '全部项目' },
-                    { key: 'pending_questions', label: '待补追问' },
-                    { key: 'strategy', label: '待确认策略' },
-                    { key: 'review', label: '低审查分' },
-                    { key: 'ready_to_draft', label: '可进入起草' },
+                    { key: 'in_disclosure', label: '交底阶段' },
+                    { key: 'in_drafting', label: '撰写中' },
+                    { key: 'in_review', label: '审校中' },
+                    { key: 'completed', label: '已完成' },
                 ].map((item) => (
                     <button
                         key={item.key}
@@ -300,9 +320,36 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
                 {/* Patent Cards */}
                 {filteredAndSortedPatents.map((patent) => {
                     const statusMeta = getStatusMeta(patent.status);
-                    const interviewRounds = Math.floor(patent.disclosureInterview.length / 2) || patent.disclosureInterview.length;
                     const reviewScore = patent.lastReviewScore ? `${patent.lastReviewScore} 分` : '未审查';
                     const blockers = getBlockers(patent);
+
+                    // Compute disclosure progress: prefer new wizard data, fall back to draftReadiness
+                    const hasNewDisclosure = !!patent.disclosureData;
+                    const totalQuestions = patent.patentType === 'utility' ? 5 : 7;
+                    const answeredCount = hasNewDisclosure
+                        ? patent.disclosureData!.answers.filter(a => a.answer.trim().length > 0).length
+                        : 0;
+                    const disclosurePercent = hasNewDisclosure
+                        ? Math.round((answeredCount / totalQuestions) * 100)
+                        : patent.draftReadiness;
+                    const disclosureLabel = hasNewDisclosure
+                        ? `${answeredCount} / ${totalQuestions} 题`
+                        : `${patent.draftReadiness}%`;
+
+                    // Patent type badge using top-level constant
+                    const typeBadge = patent.patentType ? (PATENT_TYPE_LABELS[patent.patentType] ?? null) : null;
+                    // Field badge (separate from type badge)
+                    const fieldBadge = patent.disclosureData?.field || patent.technicalField || null;
+
+                    // Drafting stage label using top-level constant
+                    const currentStageLabel = patent.draftingProgress?.currentStage
+                        ? (STAGE_LABELS[patent.draftingProgress.currentStage] ?? patent.draftingProgress.currentStage)
+                        : null;
+
+                    // Description line: try new disclosure title, then summary/field
+                    const description = patent.disclosureData?.title && patent.disclosureData.title !== patent.title
+                        ? `领域：${patent.disclosureData.field}`
+                        : patent.disclosureSummary || (patent.technicalField ? `领域：${patent.technicalField}` : '尚未开始整理技术交底内容...');
 
                     return (
                     <div 
@@ -328,36 +375,45 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
                         </h3>
                         
                         <p className="text-sm text-slate-500 mb-6 line-clamp-2 h-10">
-                            {patent.disclosureSummary || patent.technicalField ? (patent.disclosureSummary || `领域：${patent.technicalField}`) : "尚未开始整理技术交底内容..."}
+                            {description}
                         </p>
 
                         <div className="mb-5">
                             <div className="flex justify-between text-xs text-slate-400 mb-1">
                                 <span>交底完整度</span>
-                                <span>{patent.draftReadiness}%</span>
+                                <span>{disclosureLabel}</span>
                             </div>
                             <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
                                 <div
                                     className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-full"
-                                    style={{ width: `${Math.max(6, patent.draftReadiness)}%` }}
+                                    style={{ width: `${Math.max(6, disclosurePercent)}%` }}
                                 />
                             </div>
                         </div>
 
                         <div className="flex flex-wrap gap-2 mb-5">
-                            <div className="px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-medium">
-                                访谈 {interviewRounds} 轮
-                            </div>
-                            <div className={`px-3 py-1 rounded-full text-xs font-medium ${patent.claimStrategyConfirmed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                                {patent.claimStrategyConfirmed ? '策略已确认' : '待确认策略'}
-                            </div>
+                            {typeBadge && (
+                                <div className="px-3 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-medium">
+                                    {typeBadge}
+                                </div>
+                            )}
+                            {!typeBadge && fieldBadge && (
+                                <div className="px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-medium">
+                                    {fieldBadge}
+                                </div>
+                            )}
+                            {currentStageLabel && (
+                                <div className="px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 text-xs font-medium">
+                                    撰写：{currentStageLabel}
+                                </div>
+                            )}
                             <div className={`px-3 py-1 rounded-full text-xs font-medium ${patent.lastReviewScore ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-500'}`}>
                                 审查 {reviewScore}
                             </div>
                         </div>
 
                         <div className="mb-5 rounded-xl border border-slate-100 bg-slate-50 p-3">
-                            <div className="text-xs font-semibold text-slate-700 mb-2">当前卡点</div>
+                            <div className="text-xs font-semibold text-slate-700 mb-2">当前状态</div>
                             {blockers.length > 0 ? (
                                 <div className="space-y-1 text-xs text-slate-500">
                                     {blockers.map((item) => (

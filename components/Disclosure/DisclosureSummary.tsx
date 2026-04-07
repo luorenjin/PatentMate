@@ -19,7 +19,7 @@ const inventionQuestions: TemplateQuestion[] = [
 ];
 
 const utilityQuestions: TemplateQuestion[] = [
-  { id: 'q1', question: '发明目的', helpText: '', exampleAnswer: '' },
+  { id: 'q1', question: '待解决问题', helpText: '', exampleAnswer: '' },
   { id: 'q2', question: '现有产品结构', helpText: '', exampleAnswer: '' },
   { id: 'q3', question: '发明目的', helpText: '', exampleAnswer: '' },
   { id: 'q4', question: '产品结构描述', helpText: '', exampleAnswer: '' },

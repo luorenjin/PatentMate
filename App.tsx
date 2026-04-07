@@ -124,7 +124,11 @@ const App: React.FC = () => {
           setCurrentView(AppView.EDITOR);
       } else if (patent.status === 'drafting') {
           setCurrentView(AppView.DRAFTER);
+      } else if (patent.status === 'disclosure_collecting') {
+          // Patent is still in disclosure wizard – resume from where the user left off
+          setCurrentView(AppView.DISCLOSURE);
       } else {
+          // disclosure_review or other: go to novelty search / review phase
           setCurrentView(AppView.NOVELTY_SEARCH);
       }
   };
