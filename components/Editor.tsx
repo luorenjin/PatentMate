@@ -843,17 +843,18 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
        <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
               <div>
-                  <div className="text-xs uppercase tracking-[0.2em] text-violet-600 mb-2">Flow</div>
-                  <h2 className="text-xl font-bold text-slate-900">步骤 3：审校定稿与回写</h2>
-                  <p className="text-sm text-slate-500 mt-2">这里不仅做章节润色，也把审查问题回写到交底摘要和保护策略，避免问题只停留在最终文稿层。</p>
+                  <div className="text-xs uppercase tracking-[0.2em] text-violet-600 mb-2">Stage 4 / 4</div>
+                  <h2 className="text-xl font-bold text-slate-900">步骤 4：审校定稿与交底回写</h2>
+                  <p className="text-sm text-slate-500 mt-2">对申请文本做最终润色、审查模拟，并把关键问题回写到交底和保护策略，确保前后口径一致。</p>
               </div>
               <div className="flex flex-wrap items-center gap-2 text-sm">
-                  <span className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-700">1. 交底采集</span>
+                  <span className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-700">1. 技术交底</span>
+                  <span className="px-3 py-1 rounded-full bg-sky-50 text-sky-700">2. 方案评估</span>
                   <button onClick={() => setView(AppView.DRAFTER)} className="px-3 py-1 rounded-full bg-sky-50 text-sky-700 hover:bg-sky-100">
-                      2. 返回策略起草
+                      3. 返回申请撰写
                   </button>
                   <span className={`px-3 py-1 rounded-full ${patentData.status === 'ready_to_submit' ? 'bg-green-600 text-white' : 'bg-violet-50 text-violet-700'}`}>
-                      3. {patentData.status === 'ready_to_submit' ? '已定稿待提交' : '审校定稿中'}
+                      4. {patentData.status === 'ready_to_submit' ? '已定稿待提交' : '审校定稿中'}
                   </span>
               </div>
           </div>

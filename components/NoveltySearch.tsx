@@ -662,10 +662,10 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
         <div className="px-8 py-7 bg-gradient-to-r from-slate-950 via-slate-900 to-cyan-950 text-white">
           <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6">
             <div>
-              <div className="text-cyan-300 text-sm font-semibold tracking-[0.2em] uppercase mb-3">Disclosure First</div>
-              <h2 className="text-3xl font-bold mb-3">步骤 1：访谈式技术交底采集</h2>
+              <div className="text-cyan-300 text-sm font-semibold tracking-[0.2em] uppercase mb-3">Stage 2 / 4</div>
+              <h2 className="text-3xl font-bold mb-3">步骤 2：交底确认与新颖性评估</h2>
               <p className="text-slate-300 max-w-3xl leading-relaxed">
-                先把技术讲清楚，再生成专利。你只需要用工程语言描述问题、方案、实施例和效果，系统会帮你整理成可起草的交底书骨架。
+                在基础交底完成后，继续补齐关键差异点，并通过挑战式检索和保护策略把方案打磨到可起草状态。
               </p>
             </div>
             <div className="min-w-[240px] bg-white/10 border border-white/10 rounded-2xl p-5 backdrop-blur-sm">
@@ -677,7 +677,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                 <div className="h-full bg-gradient-to-r from-cyan-300 via-sky-300 to-emerald-300 rounded-full" style={{ width: `${Math.max(8, draftReadiness)}%` }} />
               </div>
               <div className="text-xs text-slate-300">
-                {draftReadiness >= 60 ? '已满足起草前最小完整度，可进入专利起草。' : '建议先补齐技术问题、关键特征和实施方式。'}
+                {draftReadiness >= 60 ? '交底基础已具备，建议完成检索与策略确认后进入申请撰写。' : '建议先补齐技术问题、关键特征和实施方式，再做检索判断。'}
               </div>
             </div>
           </div>
@@ -700,7 +700,13 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">当前阶段</label>
                 <div className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 text-slate-700">
-                  {patentData.status === 'drafting' ? '已进入专利起草' : patentData.status === 'disclosure_review' ? '待确认交底书' : '交底采集中'}
+                  {patentData.status === 'ready_to_submit'
+                    ? '已完成评估，可回看历史结论'
+                    : patentData.status === 'editing' || patentData.status === 'drafting'
+                      ? '已通过评估，进入申请撰写'
+                      : patentData.status === 'disclosure_review'
+                        ? '待确认交底与策略'
+                        : '交底完善中'}
                 </div>
               </div>
             </div>

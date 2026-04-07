@@ -75,9 +75,10 @@ const handleAIAction = async () => {
 ### User Workflow
 ```
 Dashboard (工作台)
-  └─ NoveltySearch（新颖性评估）   ← Gemini + Google Search
-       └─ PatentDrafter（智能撰写） ← Gemini generates abstract/claims/embodiments
-            └─ Editor（文书润色）   ← Polish + Mock review + Export
+  └─ PatentDraft（技术交底）        ← 专利类型、技术领域、交底问卷
+    └─ NoveltySearch（方案评估） ← Gemini + Google Search
+      └─ DraftingContainer（申请撰写） ← 分阶段生成摘要/权利要求/说明书
+        └─ Editor（审校定稿）      ← Polish + Mock review + Export
 ```
 
 ## Dependencies

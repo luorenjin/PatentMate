@@ -1,26 +1,34 @@
 import React from 'react';
-import { AppView } from '../types';
+import { AppView, PatentData } from '../types';
+import {
+  WORKFLOW_STAGES,
+  canNavigateToWorkflowStage,
+  getCurrentWorkflowStage,
+  getWorkflowStageState,
+  getWorkflowStageStatusLabel,
+} from '../workflow';
 
 interface SidebarProps {
   currentView: AppView;
   setView: (view: AppView) => void;
-  hasActivePatent: boolean;
+  patentData: PatentData | null;
   onSignOut?: () => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
   currentView,
   setView,
-  hasActivePatent,
+  patentData,
   onSignOut
 }) => {
-  const navItems = [
-    { id: AppView.DASHBOARD, label: '工作台', icon: 'M4 6h16M4 12h16M4 18h16' },
-    { id: AppView.DISCLOSURE, label: '技术交底', icon: 'M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
-    { id: AppView.NOVELTY_SEARCH, label: '新颖性评估', icon: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z' },
-    { id: AppView.DRAFTER, label: '专利撰写', icon: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z' },
-    { id: AppView.EDITOR, label: '审校定稿', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
-  ];
+  const hasActivePatent = Boolean(patentData);
+  const currentStage = getCurrentWorkflowStage(patentData);
+  const stateMeta = {
+    active: { label: '当前', className: 'border-blue-400/30 bg-blue-500/10 text-blue-200' },
+    completed: { label: '已完成', className: 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200' },
+    available: { label: '可进入', className: 'border-slate-500/40 bg-slate-700/60 text-slate-200' },
+    locked: { label: '待上一步', className: 'border-slate-700 bg-slate-900/60 text-slate-500' },
+  } as const;
 
   return (
     <div className="w-64 bg-slate-900 text-white flex flex-col h-full shrink-0 transition-all duration-300 shadow-xl z-20">
@@ -31,34 +39,85 @@ const Sidebar: React.FC<SidebarProps> = ({
         <p className="text-xs text-slate-400 mt-1">专业专利申请辅助系统</p>
       </div>
 
-      <nav className="flex-1 p-4 space-y-2">
-        {navItems.map((item) => {
-          // Disable project-specific tabs if no project is active
-          const isDisabled = !hasActivePatent && item.id !== AppView.DASHBOARD;
-          const isActive = currentView === item.id;
-          const activeClass = isActive
-            ? (hasActivePatent ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-800 text-white')
-            : isDisabled
-              ? 'text-slate-600 cursor-not-allowed'
-              : 'text-slate-300 hover:bg-slate-800';
+      <nav className="flex-1 p-4 space-y-3 overflow-y-auto">
+        <button
+          onClick={() => setView(AppView.DASHBOARD)}
+          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${
+            currentView === AppView.DASHBOARD
+              ? 'bg-blue-600 text-white shadow-lg'
+              : 'text-slate-200 hover:bg-slate-800'
+          }`}
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+          <span className="font-medium">工作台</span>
+        </button>
 
-          return (
-            <button
-              key={item.id}
-              onClick={() => !isDisabled && setView(item.id)}
-              disabled={isDisabled}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeClass}`}
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={item.icon} />
-              </svg>
-              <span className={isDisabled ? 'opacity-50' : ''}>{item.label}</span>
-              {isDisabled && (
-                  <span className="ml-auto text-xs opacity-30">🔒</span>
-              )}
-            </button>
-          );
-        })}
+        {hasActivePatent ? (
+          <div className="rounded-2xl border border-slate-700 bg-slate-800/70 p-4">
+            <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400 mb-2">当前项目</div>
+            <div className="text-sm font-semibold text-white leading-6 break-words">{patentData?.title || '未命名专利'}</div>
+            <div className="mt-3 flex items-center justify-between gap-3 text-xs">
+              <span className="text-slate-400">当前阶段</span>
+              <span className="rounded-full bg-cyan-500/10 px-2.5 py-1 text-cyan-200">
+                {currentStage ? `${currentStage.stepNumber}. ${currentStage.label}` : '未开始'}
+              </span>
+            </div>
+            <div className="mt-2 text-xs text-slate-400">{getWorkflowStageStatusLabel(patentData)}</div>
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-800/40 p-4 text-sm leading-6 text-slate-400">
+            从工作台新建项目后，侧边栏会按专利业务顺序依次解锁 4 个阶段。
+          </div>
+        )}
+
+        <div>
+          <div className="px-2 pb-2 text-[11px] uppercase tracking-[0.2em] text-slate-500">专利流程</div>
+          <div className="space-y-2">
+            {WORKFLOW_STAGES.map((item) => {
+              const state = getWorkflowStageState(item.view, currentView, patentData);
+              const isDisabled = !canNavigateToWorkflowStage(item.view, patentData);
+              const isActive = state === 'active';
+              const baseClass = isActive
+                ? 'bg-slate-800 ring-1 ring-blue-500/40 text-white shadow-lg'
+                : isDisabled
+                  ? 'bg-slate-900/50 text-slate-500 cursor-not-allowed'
+                  : 'text-slate-200 hover:bg-slate-800/80';
+              const stepCircleClass = isActive
+                ? 'bg-blue-500 text-white'
+                : state === 'completed'
+                  ? 'bg-emerald-500/15 text-emerald-200'
+                  : isDisabled
+                    ? 'bg-slate-800 text-slate-500'
+                    : 'bg-slate-700 text-slate-100';
+
+              return (
+                <button
+                  key={item.view}
+                  onClick={() => !isDisabled && setView(item.view)}
+                  disabled={isDisabled}
+                  className={`w-full rounded-2xl px-4 py-3 transition-colors ${baseClass}`}
+                >
+                  <div className="flex items-start gap-3">
+                    <span className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-sm font-semibold ${stepCircleClass}`}>
+                      {item.stepNumber}
+                    </span>
+                    <span className="min-w-0 flex-1 text-left">
+                      <span className="block text-sm font-semibold">{item.label}</span>
+                      <span className={`mt-1 block text-xs leading-5 ${isDisabled ? 'text-slate-600' : 'text-slate-400'}`}>
+                        {item.description}
+                      </span>
+                    </span>
+                    <span className={`shrink-0 rounded-full border px-2 py-1 text-[11px] font-medium ${stateMeta[state].className}`}>
+                      {stateMeta[state].label}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </nav>
 
       <div className="p-4 border-t border-slate-700 space-y-2">

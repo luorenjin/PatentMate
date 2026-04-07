@@ -13,8 +13,9 @@ React UI components implementing the 4-stage patent drafting workflow. Each comp
 |------|-------------|
 | `Dashboard.tsx` | Draft list management with create/delete functionality - the app entry point |
 | `Sidebar.tsx` | Left navigation sidebar with view switching and chat toggle |
-| `NoveltySearch.tsx` | Novelty assessment with AI search report generation |
-| `PatentDrafter.tsx` | AI-powered patent drafting (abstract, claims, drawings, detailed description) |
+| `PatentDraft.tsx` | Technical disclosure intake: patent type, field, questionnaire, and summary confirmation |
+| `NoveltySearch.tsx` | Disclosure evaluation, novelty assessment, and protection strategy refinement |
+| `Drafting/DraftingContainer.tsx` | Stage-based drafting flow for abstract, claims, description, embodiment, and drawings |
 | `Editor.tsx` | Document polishing, mock review, and export functionality |
 | `ChatAssistant.tsx` | Floating patent law chatbot (lazy loaded) |
 | `RichTextEditor.tsx` | Markdown + LaTeX editor component |
@@ -90,25 +91,30 @@ const handleBack = () => {
 
 ### Sidebar.tsx
 
-- Navigation menu: Dashboard, NoveltySearch, PatentDrafter, Editor
+- Navigation menu: Dashboard + 4-stage patent workflow
 - Active view indicator
 - Chat assistant toggle button
 - Disable views when no patent is active
 
+### PatentDraft.tsx
+
+- Step 1 technical disclosure workflow
+- Patent type selection, technical field selection, and disclosure questionnaire
+- Resume user progress from stored patent data
+
 ### NoveltySearch.tsx
 
-- Disclosure interview workflow (Q&A with AI)
-- Technical disclosure summary generation
+- Step 2 evaluation workflow after disclosure completion
+- Technical disclosure summary generation and refinement
 - Novelty search report with prior art analysis
 - Google Search integration via AI
 
-### PatentDrafter.tsx
+### Drafting/DraftingContainer.tsx
 
-- Claim strategy generation
-- Patent section generation (abstract, claims, description)
-- Image generation for patent drawings
-- Text refinement capabilities
-- Sections: abstract, claims, descriptionOfDrawings, detailedDescription
+- Step 3 stage-based drafting workflow
+- Progress stepper for abstract, claims, description, embodiment, and drawings
+- Confirmation gate before moving to the next drafting stage
+- Writes final drafting outputs back into patentData for Editor
 
 ### Editor.tsx
 

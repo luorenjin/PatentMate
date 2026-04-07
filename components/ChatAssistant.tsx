@@ -11,17 +11,19 @@ interface ChatAssistantProps {
 
 const ChatAssistant: React.FC<ChatAssistantProps> = ({ isOpen, onToggle, currentView, patentData }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'model', text: '您好，我是您的技术交底助手。您可以让我帮助梳理技术问题、补齐交底要点，或解释专利申请流程。', timestamp: Date.now() }
+    { role: 'model', text: '您好，我是您的专利工作流助手。您可以让我帮助梳理交底、评估方案、优化撰写内容，或解释当前阶段该做什么。', timestamp: Date.now() }
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const chatSessionRef = useRef<ChatSession | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const stageLabel = currentView === AppView.NOVELTY_SEARCH
-    ? '交底采集'
+  const stageLabel = currentView === AppView.DISCLOSURE
+    ? '技术交底'
+    : currentView === AppView.NOVELTY_SEARCH
+      ? '方案评估'
     : currentView === AppView.DRAFTER
-      ? '策略起草'
+      ? '申请撰写'
       : currentView === AppView.EDITOR
         ? '审校定稿'
         : '工作台';
@@ -45,9 +47,11 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ isOpen, onToggle, current
     setMessages([
       {
         role: 'model',
-        text: currentView === AppView.NOVELTY_SEARCH
-          ? '我已经接入当前技术交底上下文。你可以直接追问技术缺口、让我要点归纳，或让我解释下一轮该怎么补充。'
-          : '我已经接入当前专利任务上下文。你可以继续追问策略、章节质量或审查问题。',
+        text: currentView === AppView.DISCLOSURE
+          ? '我已经接入当前技术交底上下文。你可以让我帮你梳理问卷答案、补齐关键特征，或判断交底是否足够进入下一步。'
+          : currentView === AppView.NOVELTY_SEARCH
+            ? '我已经接入当前方案评估上下文。你可以让我分析差异点、检索风险，或判断是否适合进入申请撰写。'
+            : '我已经接入当前专利任务上下文。你可以继续追问章节质量、审查问题或定稿风险。',
         timestamp: Date.now(),
       },
     ]);
@@ -105,7 +109,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ isOpen, onToggle, current
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
           </svg>
-          {currentView === AppView.NOVELTY_SEARCH ? '交底上下文助手' : 'AI 专利顾问'}
+          {currentView === AppView.DISCLOSURE ? '交底助手' : currentView === AppView.NOVELTY_SEARCH ? '评估助手' : 'AI 专利顾问'}
         </h3>
         <button onClick={onToggle} className="text-white hover:text-blue-200 transition-colors">
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -147,7 +151,11 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ isOpen, onToggle, current
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder={currentView === AppView.NOVELTY_SEARCH ? '询问当前交底缺口、追问方向或要点归纳...' : '询问交底书或专利相关问题...'}
+            placeholder={currentView === AppView.DISCLOSURE
+              ? '询问问卷答案、交底缺口或补充方向...'
+              : currentView === AppView.NOVELTY_SEARCH
+                ? '询问差异点、检索风险或是否可进入撰写...'
+                : '询问撰写、审校或定稿相关问题...'}
             className="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white text-slate-900 placeholder-slate-400"
           />
           <button

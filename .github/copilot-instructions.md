@@ -41,9 +41,10 @@ npm run preview  # 预览生产版本
 
 ```
 Dashboard（工作台）
-  └─ NoveltySearch（新颖性评估）   ← Gemini 2.5 Flash + Google Search 工具
-       └─ PatentDrafter（智能撰写） ← Gemini 生成摘要/权利要求/实施方式
-            └─ Editor（文书润色）   ← 法言法语润色 + 模拟审查 + 导出
+  └─ PatentDraft（技术交底）        ← 专利类型、技术领域、交底问卷
+    └─ NoveltySearch（方案评估） ← Gemini 2.5 Flash + Google Search 工具
+      └─ DraftingContainer（申请撰写） ← 分阶段生成摘要/权利要求/说明书
+        └─ Editor（审校定稿）      ← 法言法语润色 + 模拟审查 + 导出
 ```
 
 ### 目录职责
@@ -51,9 +52,10 @@ Dashboard（工作台）
 ```
 /components/
   Dashboard.tsx        工作台：草稿列表、新建、删除
-  NoveltySearch.tsx    新颖性评估：检索报告、优化建议
-  PatentDrafter.tsx    撰写助理：AI 分段生成专利文本
-  Editor.tsx           文书润色：编辑、审查、导出
+  PatentDraft.tsx      技术交底：类型、领域、问卷与交底确认
+  NoveltySearch.tsx    方案评估：检索报告、优化建议、保护策略
+  Drafting/            申请撰写：分阶段生成专利文本
+  Editor.tsx           审校定稿：编辑、审查、导出
   ChatAssistant.tsx    浮窗聊天机器人（法律咨询）
   Sidebar.tsx          左侧导航 + 聊天开关
   RichTextEditor.tsx   富文本编辑器（Markdown + LaTeX）

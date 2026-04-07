@@ -19,7 +19,7 @@ tools:
 - 撰写或重写：技术领域、背景技术、发明内容、具体实施方式、摘要、权利要求书
 - 进行章节润色：通顺化、扩充细节、法言法语转写
 - 审核草稿合规性：CNIPA 申请文本规范与 PCT 通用格式要求
-- 对接项目内现有 AI 工作流：NoveltySearch、PatentDrafter、Editor
+- 对接项目内现有 AI 工作流：PatentDraft、NoveltySearch、DraftingContainer、Editor
 
 ## 目标
 

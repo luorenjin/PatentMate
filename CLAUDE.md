@@ -32,9 +32,10 @@ npm run preview  # Preview production build
 
 ```
 Dashboard (工作台)
-  └─ NoveltySearch（新颖性评估）   ← Gemini 2.5 Flash + Google Search
-       └─ PatentDrafter（智能撰写） ← Gemini generates abstract/claims/embodiments
-            └─ Editor（文书润色）   ← Polish + Mock review + Export
+  └─ PatentDraft（技术交底）        ← 专利类型、技术领域、交底问卷
+    └─ NoveltySearch（方案评估） ← Gemini 2.5 Flash + Google Search
+      └─ DraftingContainer（申请撰写） ← 分阶段生成摘要/权利要求/说明书
+        └─ Editor（审校定稿）      ← Polish + Mock review + Export
 ```
 
 ### Directory Structure
@@ -42,8 +43,9 @@ Dashboard (工作台)
 ```
 /components/
   Dashboard.tsx        - Draft list, create, delete
-  NoveltySearch.tsx    - Novelty assessment with search report
-  PatentDrafter.tsx    - AI-powered patent drafting assistant
+  PatentDraft.tsx      - Technical disclosure type/field/questionnaire flow
+  NoveltySearch.tsx    - Disclosure evaluation and novelty assessment
+  Drafting/            - Stage-based drafting flow (abstract/claims/description)
   Editor.tsx           - Text editing, review, export
   ChatAssistant.tsx    - Floating patent law chatbot
   Sidebar.tsx          - Left navigation + chat toggle

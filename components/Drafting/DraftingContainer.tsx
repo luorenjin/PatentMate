@@ -251,10 +251,10 @@ const DraftingContainer: React.FC<DraftingContainerProps> = ({
         <div className="px-8 py-7 bg-linear-to-r from-slate-950 via-slate-900 to-indigo-950 text-white">
           <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6">
             <div>
-              <div className="text-indigo-300 text-sm font-semibold tracking-[0.2em] uppercase mb-3">AI Drafting</div>
-              <h2 className="text-3xl font-bold mb-3">步骤 2：专利智能撰写</h2>
+              <div className="text-indigo-300 text-sm font-semibold tracking-[0.2em] uppercase mb-3">Stage 3 / 4</div>
+              <h2 className="text-3xl font-bold mb-3">步骤 3：申请文本撰写</h2>
               <p className="text-slate-300 max-w-3xl leading-relaxed">
-                基于已完成的技术交底，逐步生成专利申请文件各个部分，每个阶段确认后方可推进至下一阶段。
+                基于已确认的交底和评估结果，分阶段生成摘要、权利要求、说明书、实施例和附图说明。
               </p>
             </div>
             <div className="min-w-60 bg-white/10 border border-white/10 rounded-2xl p-5 backdrop-blur-sm">
@@ -270,7 +270,7 @@ const DraftingContainer: React.FC<DraftingContainerProps> = ({
               </div>
               <div className="text-xs text-slate-300">
                 {confirmedStages.length === stages.length
-                  ? '所有阶段已完成，可进入文稿编辑。'
+                  ? '所有阶段已完成，可进入步骤 4 审校定稿。'
                   : `正在撰写：${stageLabels[progress.currentStage]}`}
               </div>
             </div>
@@ -294,10 +294,10 @@ const DraftingContainer: React.FC<DraftingContainerProps> = ({
       {progress.drawings.isConfirmed && (
         <div className="mx-8 mb-8 p-6 bg-green-50 border border-green-200 rounded-2xl text-center">
           <div className="text-green-600 font-semibold mb-2">
-            专利撰写已完成！
+            申请文本已完成！
           </div>
           <p className="text-sm text-green-700 mb-4">
-            所有阶段已确认，现在可以进入文稿编辑或提交审查
+            所有阶段已确认，现在可以进入步骤 4 审校定稿。
           </p>
           <div className="flex justify-center gap-4">
             <button
@@ -363,7 +363,7 @@ const DraftingContainer: React.FC<DraftingContainerProps> = ({
               }}
               className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium"
             >
-              进入编辑
+              进入步骤 4：审校定稿
             </button>
           </div>
         </div>

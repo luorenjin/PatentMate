@@ -4,10 +4,10 @@ import { AppView, PatentData, AuthView } from './types';
 import { savePatentToStorage, createNewPatentData } from './services/storageService';
 import { isSupabaseConfigured, getSession, onAuthStateChange, signOut as supabaseSignOut } from './services/supabaseService';
 import { getOrCreateDefaultOrganization, associatePatentsWithUser } from './services/organizationService';
+import { canNavigateToWorkflowStage, getRecommendedViewForPatent } from './workflow';
 
 const ChatAssistant = lazy(() => import('./components/ChatAssistant'));
 const NoveltySearch = lazy(() => import('./components/NoveltySearch'));
-const PatentDrafter = lazy(() => import('./components/PatentDrafter'));
 const DraftingContainer = lazy(() => import('./components/Drafting/DraftingContainer'));
 const Editor = lazy(() => import('./components/Editor'));
 const Dashboard = lazy(() => import('./components/Dashboard'));
@@ -120,17 +120,7 @@ const App: React.FC = () => {
 
   const handleOpenPatent = (patent: PatentData) => {
       setPatentData(patent);
-      if (patent.status === 'ready_to_submit' || patent.status === 'editing') {
-          setCurrentView(AppView.EDITOR);
-      } else if (patent.status === 'drafting') {
-          setCurrentView(AppView.DRAFTER);
-      } else if (patent.status === 'disclosure_collecting') {
-          // Patent is still in disclosure wizard – resume from where the user left off
-          setCurrentView(AppView.DISCLOSURE);
-      } else {
-          // disclosure_review or other: go to novelty search / review phase
-          setCurrentView(AppView.NOVELTY_SEARCH);
-      }
+      setCurrentView(getRecommendedViewForPatent(patent));
   };
 
   const handleBackToDashboard = () => {
@@ -144,24 +134,38 @@ const App: React.FC = () => {
 
   // Handle sidebar navigation clicks
   const handleSidebarNavigation = (view: AppView) => {
+      const getNavigationStatus = (targetView: AppView, currentPatent: PatentData) => {
+          if (currentPatent.status === 'ready_to_submit') return currentPatent.status;
+
+          switch (targetView) {
+            case AppView.NOVELTY_SEARCH:
+              return currentPatent.status === 'disclosure_collecting' ? 'disclosure_review' : currentPatent.status;
+            case AppView.DRAFTER:
+              return currentPatent.status === 'disclosure_collecting' || currentPatent.status === 'disclosure_review'
+                ? 'drafting'
+                : currentPatent.status;
+            case AppView.EDITOR:
+              return 'editing';
+            default:
+              return currentPatent.status;
+          }
+      };
+
       if (view === AppView.DASHBOARD) {
           handleBackToDashboard();
       } else if (view === AppView.SETTINGS) {
           setCurrentView(AppView.SETTINGS);
       } else {
           if (patentData) {
-              if (view === AppView.DRAFTER && patentData.status !== 'ready_to_submit') {
-                setPatentData(prev => prev ? ({ ...prev, status: 'drafting' }) : null);
+              if (!canNavigateToWorkflowStage(view, patentData)) {
+                return;
               }
-              if (view === AppView.EDITOR && patentData.status !== 'ready_to_submit') {
-                setPatentData(prev => prev ? ({ ...prev, status: 'editing' }) : null);
+
+              const nextStatus = getNavigationStatus(view, patentData);
+              if (nextStatus !== patentData.status) {
+                setPatentData(prev => prev ? ({ ...prev, status: nextStatus }) : null);
               }
-              if (view === AppView.NOVELTY_SEARCH && patentData.status !== 'ready_to_submit') {
-                setPatentData(prev => prev ? ({
-                  ...prev,
-                  status: prev.status === 'disclosure_collecting' ? 'disclosure_collecting' : 'disclosure_review'
-                }) : null);
-              }
+
               setCurrentView(view);
           }
       }
@@ -294,7 +298,7 @@ const App: React.FC = () => {
       <Sidebar
           currentView={currentView}
           setView={handleSidebarNavigation}
-          hasActivePatent={!!patentData}
+          patentData={patentData}
           onSignOut={handleSignOut}
       />
 
