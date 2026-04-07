@@ -1,6 +1,21 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { PatentData, PatentStatus } from '../types';
+import { PatentData, PatentStatus, DraftingStage } from '../types';
 import { getPatents, deletePatentFromStorage } from '../services/storageService';
+
+// Maps drafting stage keys to display labels
+const STAGE_LABELS: Record<DraftingStage, string> = {
+    abstract: '摘要',
+    claims: '权利要求',
+    description: '说明书',
+    embodiment: '实施例',
+    drawings: '附图说明',
+};
+
+// Maps patent type values to display labels
+const PATENT_TYPE_LABELS: Record<string, string> = {
+    invention: '发明专利',
+    utility: '实用新型',
+};
 
 interface DashboardProps {
     onOpenPatent: (patent: PatentData) => void;
@@ -321,23 +336,14 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
                         ? `${answeredCount} / ${totalQuestions} 题`
                         : `${patent.draftReadiness}%`;
 
-                    // Patent type badge (only show explicit type labels)
-                    const typeBadge = patent.patentType === 'invention' ? '发明专利'
-                        : patent.patentType === 'utility' ? '实用新型'
-                        : null;
+                    // Patent type badge using top-level constant
+                    const typeBadge = patent.patentType ? (PATENT_TYPE_LABELS[patent.patentType] ?? null) : null;
                     // Field badge (separate from type badge)
                     const fieldBadge = patent.disclosureData?.field || patent.technicalField || null;
 
-                    // Drafting stage label map
-                    const STAGE_LABELS: Record<string, string> = {
-                        abstract: '摘要',
-                        claims: '权利要求',
-                        description: '说明书',
-                        embodiment: '实施例',
-                        drawings: '附图说明',
-                    };
+                    // Drafting stage label using top-level constant
                     const currentStageLabel = patent.draftingProgress?.currentStage
-                        ? STAGE_LABELS[patent.draftingProgress.currentStage] ?? patent.draftingProgress.currentStage
+                        ? (STAGE_LABELS[patent.draftingProgress.currentStage] ?? patent.draftingProgress.currentStage)
                         : null;
 
                     // Description line: try new disclosure title, then summary/field

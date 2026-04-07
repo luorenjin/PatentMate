@@ -150,10 +150,6 @@ const App: React.FC = () => {
           setCurrentView(AppView.SETTINGS);
       } else {
           if (patentData) {
-              if (view === AppView.DISCLOSURE) {
-                // Navigate back to disclosure wizard; status is preserved as-is
-                // (no status change needed when going back to the wizard)
-              }
               if (view === AppView.DRAFTER && patentData.status !== 'ready_to_submit') {
                 setPatentData(prev => prev ? ({ ...prev, status: 'drafting' }) : null);
               }
