@@ -7,6 +7,13 @@ import {
   getDiagramTypeName,
   getDiagramTypeDescription
 } from '../../services/diagramService';
+import {
+  generateAnnotation,
+  generateDrawingDescription,
+  ImageAnnotation,
+  parseReferenceInput,
+  formatReferenceList,
+} from '../../services/imageAnnotationService';
 import { renderMarkdown } from '../../services/markdownService';
 import MermaidRenderer from '../MermaidRenderer';
 
@@ -41,6 +48,12 @@ const DrawingsGenerator: React.FC<DrawingsGeneratorProps> = ({
     code: string;
     language: 'mermaid' | 'plantuml';
   }>>([]);
+
+  // 图片标注状态
+  const [showAnnotationPanel, setShowAnnotationPanel] = useState(false);
+  const [currentFigureNumber, setCurrentFigureNumber] = useState('图1');
+  const [figureDescription, setFigureDescription] = useState('');
+  const [generatedAnnotations, setGeneratedAnnotations] = useState<ImageAnnotation[]>([]);
 
   const diagramTypes: DiagramType[] = ['flowchart', 'sequence', 'architecture', 'class', 'component', 'deployment'];
 
@@ -103,6 +116,59 @@ const DrawingsGenerator: React.FC<DrawingsGeneratorProps> = ({
 
   const handleRemoveDiagram = (index: number) => {
     setGeneratedDiagrams((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleGenerateAnnotation = () => {
+    if (!figureDescription.trim()) {
+      alert('请输入附图描述，例如：101为主体，102为支架，103为连接件');
+      return;
+    }
+
+    try {
+      const annotation = generateAnnotation({
+        figureNumber: currentFigureNumber,
+        patentTitle: patentData.title,
+        technicalField: patentData.selectedTechnicalField,
+        inventionSummary: patentData.inventionContent,
+        userDescription: figureDescription,
+      });
+
+      setGeneratedAnnotations((prev) => [...prev, annotation]);
+      setFigureDescription('');
+
+      // 自动递增图号
+      const match = currentFigureNumber.match(/(\d+)/);
+      if (match) {
+        const nextNum = parseInt(match[1], 10) + 1;
+        setCurrentFigureNumber(`图${nextNum}`);
+      }
+
+      alert(`${annotation.figureNumber} 标注生成成功！`);
+    } catch (error) {
+      console.error('Failed to generate annotation:', error);
+      alert('标注生成失败，请重试');
+    }
+  };
+
+  const handleRemoveAnnotation = (index: number) => {
+    setGeneratedAnnotations((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleApplyAnnotations = () => {
+    if (generatedAnnotations.length === 0) {
+      alert('请先生成至少一个附图标注');
+      return;
+    }
+
+    const annotationMarkdown = generateDrawingDescription(generatedAnnotations);
+    const annotationHtml = renderMarkdown(annotationMarkdown);
+
+    // 合并到现有内容
+    const currentContent = editContent || stageData.content || '';
+    const updatedContent = currentContent + '\n\n' + annotationHtml;
+
+    onUpdate(updatedContent);
+    alert(`已应用 ${generatedAnnotations.length} 个附图标注到文档！`);
   };
 
   const previewHtml = renderMarkdown(editContent || stageData.content || '');
@@ -222,6 +288,126 @@ const DrawingsGenerator: React.FC<DrawingsGeneratorProps> = ({
                       <p className="text-xs text-slate-500 mt-2">
                         PlantUML 代码已生成，可复制到 <a href="http://www.plantuml.com/plantuml" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">plantuml.com</a> 在线渲染
                       </p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 附图标注面板 */}
+      <div className="mb-6 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-2xl border border-emerald-200 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h4 className="text-lg font-bold text-emerald-900 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+              </svg>
+              智能图片标注
+            </h4>
+            <p className="text-sm text-emerald-700 mt-1">自动识别参考标号，生成标准附图说明文本</p>
+          </div>
+          <button
+            onClick={() => setShowAnnotationPanel(!showAnnotationPanel)}
+            className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-semibold"
+          >
+            {showAnnotationPanel ? '收起' : '展开标注器'}
+          </button>
+        </div>
+
+        {showAnnotationPanel && (
+          <div className="space-y-4">
+            {/* 图号输入 */}
+            <div>
+              <label className="block text-sm font-semibold text-slate-700 mb-2">图号</label>
+              <input
+                type="text"
+                value={currentFigureNumber}
+                onChange={(e) => setCurrentFigureNumber(e.target.value)}
+                placeholder="例如：图1"
+                className="w-full p-3 border border-slate-300 rounded-xl text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+
+            {/* 标注描述输入 */}
+            <div>
+              <label className="block text-sm font-semibold text-slate-700 mb-2">
+                附图描述（输入参考标号及说明）
+              </label>
+              <textarea
+                value={figureDescription}
+                onChange={(e) => setFigureDescription(e.target.value)}
+                placeholder={`例如：101为主体框架，102为支撑杆，103为连接件，整体构成一个可折叠结构`}
+                className="w-full h-24 p-4 border border-slate-300 rounded-xl text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"
+              />
+              <p className="text-xs text-slate-500 mt-2">
+                💡 提示：直接输入 "101为XXX，102为YYY" 格式，系统将自动识别参考标号
+              </p>
+            </div>
+
+            <button
+              onClick={handleGenerateAnnotation}
+              disabled={!figureDescription.trim()}
+              className="w-full py-3 bg-emerald-600 text-white rounded-xl font-semibold hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+              </svg>
+              生成标注
+            </button>
+          </div>
+        )}
+
+        {/* 已生成的标注列表 */}
+        {generatedAnnotations.length > 0 && (
+          <div className="mt-6 pt-6 border-t border-emerald-200">
+            <div className="flex items-center justify-between mb-3">
+              <h5 className="text-sm font-bold text-slate-700">已生成标注 ({generatedAnnotations.length})</h5>
+              <button
+                onClick={handleApplyAnnotations}
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-semibold flex items-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                应用到文档
+              </button>
+            </div>
+            <div className="space-y-3">
+              {generatedAnnotations.map((annotation, idx) => (
+                <div key={idx} className="bg-white rounded-xl border border-slate-200 p-4">
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-emerald-700">
+                        {annotation.figureNumber}
+                      </span>
+                      <span className="text-xs text-slate-500">·</span>
+                      <span className="text-xs text-slate-600">
+                        {annotation.type}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => handleRemoveAnnotation(idx)}
+                      className="text-red-600 hover:text-red-800 text-xs font-semibold"
+                    >
+                      删除
+                    </button>
+                  </div>
+                  <p className="text-sm text-slate-700 mb-3">{annotation.description}</p>
+                  {annotation.referenceNumbers.length > 0 && (
+                    <div className="bg-slate-50 rounded-lg p-3">
+                      <p className="text-xs font-semibold text-slate-600 mb-2">参考标号 ({annotation.referenceNumbers.length}):</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {annotation.referenceNumbers.map((ref, refIdx) => (
+                          <div key={refIdx} className="text-xs text-slate-700 flex items-center gap-1">
+                            <span className="font-mono font-semibold text-emerald-600">{ref.number}</span>
+                            <span className="text-slate-400">→</span>
+                            <span>{ref.label}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
