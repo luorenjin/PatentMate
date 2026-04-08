@@ -1154,12 +1154,32 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                                  <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">具体修改建议</div>
                                  {reviewResult.detailedIssues.map((issue, idx) => {
                                      const isFixed = fixedIssueIndices.includes(idx);
+                                     const severityColor = issue.severity === 'critical' ? 'red' : issue.severity === 'major' ? 'orange' : 'yellow';
+                                     const borderColor = isFixed ? 'border-green-200' : `border-${severityColor}-200`;
+                                     const bgColor = isFixed ? 'bg-green-50' : `bg-${severityColor}-50`;
+
                                      return (
-                                     <div key={idx} className={`border rounded-lg p-3 transition-all ${isFixed ? 'bg-green-50 border-green-200 opacity-80' : 'bg-red-50 border-red-100 hover:shadow-md'}`}>
-                                         <div className="flex justify-between items-start mb-2">
-                                            <span className={`inline-block px-2 py-0.5 rounded border text-[10px] font-bold ${isFixed ? 'bg-green-100 text-green-700 border-green-200' : 'bg-white text-red-600 border-red-100'}`}>
-                                                {getSectionLabel(issue.section)}
-                                            </span>
+                                     <div key={idx} className={`border rounded-lg p-3 transition-all ${isFixed ? 'bg-green-50 border-green-200 opacity-80' : `bg-${severityColor}-50 border-${severityColor}-100 hover:shadow-md`}`}>
+                                         <div className="flex justify-between items-start mb-2 flex-wrap gap-2">
+                                            <div className="flex gap-2 flex-wrap">
+                                                <span className={`inline-block px-2 py-0.5 rounded border text-[10px] font-bold ${isFixed ? 'bg-green-100 text-green-700 border-green-200' : `bg-white text-${severityColor}-600 border-${severityColor}-100`}`}>
+                                                    {getSectionLabel(issue.section)}
+                                                </span>
+                                                {issue.severity && (
+                                                    <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
+                                                        issue.severity === 'critical' ? 'bg-red-100 text-red-700' :
+                                                        issue.severity === 'major' ? 'bg-orange-100 text-orange-700' :
+                                                        'bg-yellow-100 text-yellow-700'
+                                                    }`}>
+                                                        {issue.severity === 'critical' ? '严重' : issue.severity === 'major' ? '重要' : '一般'}
+                                                    </span>
+                                                )}
+                                                {issue.category && (
+                                                    <span className="inline-block px-2 py-0.5 rounded bg-blue-100 text-blue-700 border border-blue-200 text-[10px] font-bold">
+                                                        {issue.category}
+                                                    </span>
+                                                )}
+                                            </div>
                                             {isFixed && (
                                                 <span className="text-green-600 text-xs font-bold flex items-center gap-1">
                                                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
@@ -1172,12 +1192,16 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                                          </p>
                                          {!isFixed ? (
                                              <div className="space-y-2">
-                                                <button 
+                                                <button
                                                     onClick={() => handleApplyFix(issue, idx)}
-                                                    className="w-full py-2 bg-white border border-red-200 text-red-600 text-xs font-bold rounded hover:bg-red-600 hover:text-white transition-colors flex items-center justify-center gap-1"
+                                                    className={`w-full py-2 bg-white border text-xs font-bold rounded hover:text-white transition-colors flex items-center justify-center gap-1 ${
+                                                        issue.severity === 'critical' ? 'border-red-200 text-red-600 hover:bg-red-600' :
+                                                        issue.severity === 'major' ? 'border-orange-200 text-orange-600 hover:bg-orange-600' :
+                                                        'border-yellow-200 text-yellow-700 hover:bg-yellow-600'
+                                                    }`}
                                                 >
                                                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                                                    应用 AI 修正建议
+                                                    一键采纳 AI 修正建议
                                                 </button>
                                                 <div className="grid grid-cols-2 gap-2">
                                                     <button

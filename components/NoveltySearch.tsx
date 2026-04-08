@@ -1214,12 +1214,60 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                   ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                   : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />}
               </svg>
-              <p className={`text-sm leading-relaxed ${report.score >= 80 ? 'text-emerald-700' : 'text-amber-700'}`}>
-                {report.score >= 80
-                  ? '当前方案与现有技术差异较明显，可以进入专利起草阶段。建议参考下方分析进一步巩固保护范围。'
-                  : '当前方案与现有技术存在较多重叠，建议先阅读下方 AI 分析，通过「基于检索结果补强交底」功能差异化后再起草。'}
-              </p>
+              <div className="flex-1">
+                <p className={`text-sm leading-relaxed mb-3 ${report.score >= 80 ? 'text-emerald-700' : 'text-amber-700'}`}>
+                  {report.score >= 80
+                    ? '当前方案与现有技术差异较明显，可以进入专利起草阶段。建议参考下方分析进一步巩固保护范围。'
+                    : '当前方案与现有技术存在较多重叠，建议先阅读下方 AI 分析，通过「基于检索结果补强交底」功能差异化后再起草。'}
+                </p>
+
+                {/* 评分细分 */}
+                {report.scoreBreakdown && (
+                  <div className="grid grid-cols-3 gap-3 mt-3 pt-3 border-t border-emerald-200/50">
+                    <div className="text-center">
+                      <div className="text-xs text-slate-600 mb-1">新颖性</div>
+                      <div className={`text-lg font-bold ${report.scoreBreakdown.novelty >= 30 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                        {report.scoreBreakdown.novelty}/40
+                      </div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-xs text-slate-600 mb-1">创造性</div>
+                      <div className={`text-lg font-bold ${report.scoreBreakdown.creativity >= 30 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                        {report.scoreBreakdown.creativity}/40
+                      </div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-xs text-slate-600 mb-1">实用性</div>
+                      <div className={`text-lg font-bold ${report.scoreBreakdown.utility >= 15 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                        {report.scoreBreakdown.utility}/20
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
+
+            {/* 规避建议 */}
+            {report.avoidanceRecommendations && report.avoidanceRecommendations.length > 0 && (
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                <h4 className="text-sm font-semibold text-blue-900 mb-3 flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                  </svg>
+                  专利规避建议
+                </h4>
+                <ul className="space-y-2">
+                  {report.avoidanceRecommendations.map((recommendation, idx) => (
+                    <li key={idx} className="flex items-start gap-2 text-sm text-blue-800">
+                      <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-200 text-blue-700 flex items-center justify-center text-xs font-semibold mt-0.5">
+                        {idx + 1}
+                      </span>
+                      <span className="flex-1">{recommendation}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             {/* AI 对抗分析 */}
             <div>
