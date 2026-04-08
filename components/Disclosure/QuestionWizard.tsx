@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { DisclosureData, PatentType, TechnicalField, TemplateQuestion } from '../../types';
+import { generateDeepQuestionnaire, hasQuantitativeData } from '../../services/disclosureTemplateService';
 
 interface QuestionWizardProps {
   patentType: PatentType;
@@ -11,8 +12,8 @@ interface QuestionWizardProps {
   onBack: () => void;
 }
 
-// Template questions for invention patent (7 questions)
-const inventionQuestions: TemplateQuestion[] = [
+// Legacy Template questions for invention patent (7 questions) - kept for backward compatibility
+const inventionQuestionsLegacy: TemplateQuestion[] = [
   {
     id: 'q1',
     question: '发明目的 - 您的发明旨在解决什么问题？',
@@ -64,8 +65,8 @@ const inventionQuestions: TemplateQuestion[] = [
   },
 ];
 
-// Template questions for utility model (5 questions)
-const utilityQuestions: TemplateQuestion[] = [
+// Legacy Template questions for utility model (5 questions) - kept for backward compatibility
+const utilityQuestionsLegacy: TemplateQuestion[] = [
   {
     id: 'q1',
     question: '发明目的 - 您的实用新型旨在解决什么问题？',
@@ -112,7 +113,12 @@ const QuestionWizard: React.FC<QuestionWizardProps> = ({
   onComplete,
   onBack,
 }) => {
-  const questions = patentType === 'invention' ? inventionQuestions : utilityQuestions;
+  // Use deep questionnaire service to generate field-specific questions
+  const questions = useMemo(
+    () => generateDeepQuestionnaire(patentType, technicalField),
+    [patentType, technicalField]
+  );
+
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string>>({});
 
@@ -129,6 +135,9 @@ const QuestionWizard: React.FC<QuestionWizardProps> = ({
 
   const currentQuestion = questions[currentIndex];
   const progress = ((currentIndex + 1) / questions.length) * 100;
+  const isEvidenceQuestion = currentQuestion.id.startsWith('q_evidence');
+  const currentAnswer = answers[currentQuestion.id] || '';
+  const hasQuantData = isEvidenceQuestion && currentAnswer ? hasQuantitativeData(currentAnswer) : false;
 
   const handleAnswerChange = (value: string) => {
     setAnswers((prev) => ({ ...prev, [currentQuestion.id]: value }));
@@ -183,10 +192,22 @@ const QuestionWizard: React.FC<QuestionWizardProps> = ({
       </div>
 
       {/* Question */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm mb-6">
-        <h3 className="text-lg font-bold text-slate-900 mb-2">
-          {currentQuestion.question}
-        </h3>
+      <div className={`bg-white rounded-2xl border-2 p-6 shadow-sm mb-6 ${
+        isEvidenceQuestion ? 'border-amber-300 bg-amber-50/20' : 'border-slate-200'
+      }`}>
+        <div className="flex items-start justify-between mb-2">
+          <h3 className="text-lg font-bold text-slate-900 flex-1">
+            {currentQuestion.question}
+          </h3>
+          {isEvidenceQuestion && (
+            <span className="ml-2 px-2 py-1 bg-amber-100 text-amber-800 text-xs font-bold rounded flex items-center gap-1">
+              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+              </svg>
+              {currentQuestion.question.includes('【必填】') ? '必填证据' : '可选证据'}
+            </span>
+          )}
+        </div>
         <p className="text-sm text-slate-600 mb-4">{currentQuestion.helpText}</p>
 
         <div className="mb-4 p-3 bg-blue-50 rounded-lg">
@@ -195,14 +216,41 @@ const QuestionWizard: React.FC<QuestionWizardProps> = ({
         </div>
 
         <textarea
-          value={answers[currentQuestion.id] || ''}
+          value={currentAnswer}
           onChange={(e) => handleAnswerChange(e.target.value)}
           placeholder={currentQuestion.placeholder}
-          className="w-full h-40 p-4 border border-slate-200 rounded-xl text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+          className={`w-full h-40 p-4 border-2 rounded-xl text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:border-transparent resize-none ${
+            isEvidenceQuestion
+              ? 'border-amber-200 focus:ring-amber-500 bg-white'
+              : 'border-slate-200 focus:ring-blue-500'
+          }`}
         />
 
-        <div className="mt-2 text-xs text-slate-400">
-          已输入 {answers[currentQuestion.id]?.length || 0} 字符
+        <div className="mt-2 flex items-center justify-between">
+          <div className="text-xs text-slate-400">
+            已输入 {currentAnswer?.length || 0} 字符
+          </div>
+          {isEvidenceQuestion && currentAnswer && (
+            <div className={`text-xs font-semibold flex items-center gap-1 ${
+              hasQuantData ? 'text-green-600' : 'text-red-600'
+            }`}>
+              {hasQuantData ? (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  包含量化数据
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  缺少具体数字或单位
+                </>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
