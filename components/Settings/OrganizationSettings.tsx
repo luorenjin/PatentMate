@@ -153,9 +153,18 @@ const getPlanLabel = (plan: OrganizationPlan): string => {
   return getPlanDetails(plan).label;
 };
 
+const getPlanRank = (plan: OrganizationPlan): number => {
+  const index = PLAN_OPTIONS.findIndex((option) => option.value === plan);
+  return index >= 0 ? index : 0;
+};
+
+const isPlanUpgrade = (currentPlan: OrganizationPlan, targetPlan: OrganizationPlan): boolean => {
+  return getPlanRank(targetPlan) > getPlanRank(currentPlan);
+};
+
 const getPlanActionLabel = (currentPlan: OrganizationPlan, nextPlan: OrganizationPlan): string => {
-  const currentIndex = PLAN_OPTIONS.findIndex((option) => option.value === currentPlan);
-  const nextIndex = PLAN_OPTIONS.findIndex((option) => option.value === nextPlan);
+  const currentIndex = getPlanRank(currentPlan);
+  const nextIndex = getPlanRank(nextPlan);
 
   if (currentIndex === nextIndex) {
     return '当前计划';
@@ -516,6 +525,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
   const planLabel = currentPlanDetails.label;
   const recommendedPlan = getRecommendedPlan(activeMembersCount, managersCount);
   const recommendedPlanLabel = getPlanLabel(recommendedPlan);
+  const hasRecommendedUpgrade = isPlanUpgrade(currentPlan, recommendedPlan);
   const nextPlan = getNextPlan(currentPlan);
   const nextPlanLabel = nextPlan ? getPlanLabel(nextPlan) : null;
   const assignableRoles: OrganizationMemberRole[] = getAvailableRolesForPlan(currentPlan).filter((role) => role !== 'owner');
@@ -562,7 +572,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
     {
       id: 'plans',
       label: 'Plan 升级',
-      badge: recommendedPlan !== currentPlan ? '建议升级' : planLabel,
+      badge: hasRecommendedUpgrade ? '建议升级' : planLabel,
     },
     {
       id: 'members',
@@ -687,7 +697,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
             </div>
 
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">默认组织名称</label>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">组织名称</label>
               <input
                 type="text"
                 value={profileForm.defaultOrganizationName}
@@ -784,7 +794,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
             />
           </div>
 
-          {recommendedPlan !== currentPlan && (
+          {hasRecommendedUpgrade && (
             <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800">
               根据当前团队规模，建议升级到
               <span className="mx-1 font-semibold">{recommendedPlanLabel}</span>
@@ -856,7 +866,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
               </div>
             </div>
 
-            {recommendedPlan !== currentPlan && (
+            {hasRecommendedUpgrade && (
               <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800">
                 根据当前团队规模，建议升级到
                 <span className="mx-1 font-semibold">{recommendedPlanLabel}</span>
@@ -873,7 +883,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                 .map((role) => getRoleLabel(role))
                 .join(' / ');
               const isCurrent = option.value === currentPlan;
-              const isRecommended = option.value === recommendedPlan && !isCurrent;
+              const isRecommended = hasRecommendedUpgrade && option.value === recommendedPlan && !isCurrent;
               const isProcessing = isChangingPlan === option.value;
               const planChangeError = !isCurrent ? getOrganizationPlanChangeError(organization, option.value) : null;
 
@@ -1135,13 +1145,13 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
               </div>
             </div>
 
-            {(recommendedPlan !== currentPlan || isMemberQuotaFull) && (
+            {(hasRecommendedUpgrade || isMemberQuotaFull) && (
               <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800">
                 {isMemberQuotaFull
                   ? nextPlanLabel
                     ? `当前席位已满，建议切换到 ${nextPlanLabel} 后继续扩充成员。`
                     : '当前席位已满，且当前已是最高档 Plan。'
-                  : `按当前团队规模，更适合使用 ${recommendedPlanLabel}。`}
+                  : `按当前团队规模，更适合升级到 ${recommendedPlanLabel}。`}
               </div>
             )}
 
