@@ -442,9 +442,15 @@ export const performNoveltySearch = async (
     
     JSON结构如下：
     {
-      "score": number,
+      "score": number,  // 总分 0-100
+      "scoreBreakdown": {
+        "novelty": number,      // 新颖性 0-40
+        "creativity": number,   // 创造性 0-40
+        "utility": number       // 实用性 0-20
+      },
       "analysis": "详细的定性分析报告（不要包含分数和链接列表）...",
-      "priorArtLinks": [{"title": "标题", "uri": "URL"}]
+      "priorArtLinks": [{"title": "标题", "uri": "URL"}],
+      "avoidanceRecommendations": ["规避建议1", "规避建议2"]
     }
   `;
 
@@ -495,6 +501,23 @@ export const performNoveltySearch = async (
         report.score = extractScore(jsonString);
       if (typeof report.analysis !== "string") report.analysis = "";
       if (!Array.isArray(report.priorArtLinks)) report.priorArtLinks = [];
+
+      // 处理评分细分
+      if (report.scoreBreakdown) {
+        const breakdown = report.scoreBreakdown;
+        if (typeof breakdown.novelty !== 'number' || breakdown.novelty < 0 || breakdown.novelty > 40) {
+          delete report.scoreBreakdown;
+        } else if (typeof breakdown.creativity !== 'number' || breakdown.creativity < 0 || breakdown.creativity > 40) {
+          delete report.scoreBreakdown;
+        } else if (typeof breakdown.utility !== 'number' || breakdown.utility < 0 || breakdown.utility > 20) {
+          delete report.scoreBreakdown;
+        }
+      }
+
+      // 处理规避建议
+      if (!Array.isArray(report.avoidanceRecommendations)) {
+        report.avoidanceRecommendations = [];
+      }
     } catch (e) {
       // JSON 解析失败：用正则从原文中分别提取各字段
       const score = extractScore(jsonString);
@@ -1329,6 +1352,8 @@ export const runFinalPatentReview = async (
         "detailedIssues": [
            {
              "section": "claims" | "abstract" | "detailedDescription" | "backgroundArt" | "descriptionOfDrawings", // 必须是这几个字符串之一
+             "severity": "critical" | "major" | "minor", // 严重程度
+             "category": "新颖性" | "创造性" | "公开充分" | "格式规范" | "权利要求" | "术语一致性", // 问题类别
              "issue": "具体问题的详细描述",
              "suggestion": "针对该章节的完整重写建议内容（Fix）"
            }
@@ -1346,6 +1371,17 @@ export const runFinalPatentReview = async (
       result.feedback = DEFAULT_REVIEW_RESULT.feedback;
     if (typeof result.passed !== "boolean") result.passed = result.score > 80;
     if (!Array.isArray(result.detailedIssues)) result.detailedIssues = [];
+
+    // 确保每个 issue 都有 severity 和 category
+    result.detailedIssues = result.detailedIssues.map((issue) => {
+      if (!issue.severity) {
+        issue.severity = issue.issue.includes('不符合') || issue.issue.includes('错误') ? 'major' : 'minor';
+      }
+      if (!issue.category) {
+        issue.category = '格式规范';
+      }
+      return issue;
+    });
 
     return result;
   } catch (error) {
@@ -1431,10 +1467,11 @@ export const generateClaims = async (
 
     要求：
     1. 返回JSON格式，包含 independentClaims 和 dependentClaims
-    2. 独立权利要求1个，描述核心技术方案，采用"包括……其特征在于……"格式
-    3. 从属权利要求2-4个，描述优选实施方式
-    4. 权利要求清楚、得到说明书支持
-    5. 直接返回JSON，不要包含解释性文字
+    2. **独立权利要求必须是一个完整句子**，不得包含句号分段，必须采用"一种……，包括……；其特征在于……"的标准结构
+    3. 从属权利要求2-4个，每条必须明确引用编号："根据权利要求N所述的……，其特征在于……"
+    4. 每条权利要求只能包含一个主句，技术特征之间用"，"或"；"连接
+    5. 权利要求术语必须与技术方案描述一致
+    6. 直接返回JSON，不要包含解释性文字
 
     JSON格式：
     {

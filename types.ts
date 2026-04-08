@@ -175,6 +175,12 @@ export interface NoveltyReport {
   score: number;
   analysis: string;
   priorArtLinks: Array<{ title: string; uri: string }>;
+  scoreBreakdown?: {
+    novelty: number;        // 新颖性评分 0-40
+    creativity: number;     // 创造性评分 0-40
+    utility: number;        // 实用性评分 0-20
+  };
+  avoidanceRecommendations?: string[];  // 规避建议
 }
 
 export interface ChatMessage {
@@ -194,6 +200,8 @@ export interface ReviewIssue {
   section: keyof PatentData;
   issue: string;
   suggestion: string;
+  severity?: 'critical' | 'major' | 'minor';
+  category?: '新颖性' | '创造性' | '公开充分' | '格式规范' | '权利要求' | '术语一致性';
 }
 
 export interface ReviewResult {
