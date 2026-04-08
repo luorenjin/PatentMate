@@ -1,10 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { StageData } from '../../types';
+import { PatentData, StageData } from '../../types';
 import { generateDrawingsDescription } from '../../services/aiService';
+import {
+  generateDiagram,
+  DiagramType,
+  getDiagramTypeName,
+  getDiagramTypeDescription
+} from '../../services/diagramService';
 import { renderMarkdown } from '../../services/markdownService';
+import MermaidRenderer from '../MermaidRenderer';
 
 interface DrawingsGeneratorProps {
   embodimentsJson: string;
+  patentData: PatentData;
   stageData: StageData;
   onUpdate: (content: string) => void;
   onConfirm: () => void;
@@ -13,6 +21,7 @@ interface DrawingsGeneratorProps {
 
 const DrawingsGenerator: React.FC<DrawingsGeneratorProps> = ({
   embodimentsJson,
+  patentData,
   stageData,
   onUpdate,
   onConfirm,
@@ -21,6 +30,19 @@ const DrawingsGenerator: React.FC<DrawingsGeneratorProps> = ({
   const [isGenerating, setIsGenerating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(stageData.content);
+
+  // 图表生成状态
+  const [showDiagramPanel, setShowDiagramPanel] = useState(false);
+  const [selectedDiagramType, setSelectedDiagramType] = useState<DiagramType>('flowchart');
+  const [diagramDescription, setDiagramDescription] = useState('');
+  const [isGeneratingDiagram, setIsGeneratingDiagram] = useState(false);
+  const [generatedDiagrams, setGeneratedDiagrams] = useState<Array<{
+    type: DiagramType;
+    code: string;
+    language: 'mermaid' | 'plantuml';
+  }>>([]);
+
+  const diagramTypes: DiagramType[] = ['flowchart', 'sequence', 'architecture', 'class', 'component', 'deployment'];
 
   useEffect(() => {
     setEditContent(stageData.content);
@@ -50,13 +72,163 @@ const DrawingsGenerator: React.FC<DrawingsGeneratorProps> = ({
     setIsEditing(false);
   };
 
+  const handleGenerateDiagram = async () => {
+    if (!diagramDescription.trim()) {
+      alert('请输入图表描述');
+      return;
+    }
+
+    setIsGeneratingDiagram(true);
+    try {
+      const result = await generateDiagram({
+        type: selectedDiagramType,
+        description: diagramDescription,
+        context: {
+          patentTitle: patentData.title,
+          technicalField: patentData.selectedTechnicalField,
+          inventionContent: patentData.inventionContent,
+        },
+      });
+
+      setGeneratedDiagrams((prev) => [...prev, result]);
+      setDiagramDescription('');
+      alert(`${getDiagramTypeName(selectedDiagramType)}生成成功！`);
+    } catch (error) {
+      console.error('Failed to generate diagram:', error);
+      alert('图表生成失败，请重试');
+    } finally {
+      setIsGeneratingDiagram(false);
+    }
+  };
+
+  const handleRemoveDiagram = (index: number) => {
+    setGeneratedDiagrams((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const previewHtml = renderMarkdown(editContent || stageData.content || '');
 
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="max-w-4xl mx-auto">
       <div className="mb-6">
         <h3 className="text-xl font-bold text-slate-900 mb-2">阶段5：生成附图说明</h3>
-        <p className="text-slate-600">描述每幅附图所要表达的技术方案内容</p>
+        <p className="text-slate-600">描述每幅附图所要表达的技术方案内容，或使用 AI 生成技术示意图</p>
+      </div>
+
+      {/* 图表生成面板 */}
+      <div className="mb-6 bg-gradient-to-r from-indigo-50 to-blue-50 rounded-2xl border border-indigo-200 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h4 className="text-lg font-bold text-indigo-900 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+              </svg>
+              AI 技术示意图生成
+            </h4>
+            <p className="text-sm text-indigo-700 mt-1">生成流程图、架构图、类图等专利附图（Mermaid/PlantUML）</p>
+          </div>
+          <button
+            onClick={() => setShowDiagramPanel(!showDiagramPanel)}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm font-semibold"
+          >
+            {showDiagramPanel ? '收起' : '展开生成器'}
+          </button>
+        </div>
+
+        {showDiagramPanel && (
+          <div className="space-y-4">
+            {/* 图表类型选择 */}
+            <div>
+              <label className="block text-sm font-semibold text-slate-700 mb-2">选择图表类型</label>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {diagramTypes.map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => setSelectedDiagramType(type)}
+                    className={`p-3 rounded-xl border-2 transition-all text-left ${
+                      selectedDiagramType === type
+                        ? 'border-indigo-500 bg-indigo-100'
+                        : 'border-slate-200 bg-white hover:border-indigo-300'
+                    }`}
+                  >
+                    <div className="text-sm font-bold text-slate-900 mb-1">
+                      {getDiagramTypeName(type)}
+                    </div>
+                    <div className="text-xs text-slate-600">
+                      {getDiagramTypeDescription(type)}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 图表描述输入 */}
+            <div>
+              <label className="block text-sm font-semibold text-slate-700 mb-2">
+                描述图表内容（AI 将根据描述生成{getDiagramTypeName(selectedDiagramType)}）
+              </label>
+              <textarea
+                value={diagramDescription}
+                onChange={(e) => setDiagramDescription(e.target.value)}
+                placeholder={`例如：展示用户登录流程，包括输入验证、后端认证、token生成和返回结果...`}
+                className="w-full h-24 p-4 border border-slate-300 rounded-xl text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+              />
+            </div>
+
+            <button
+              onClick={handleGenerateDiagram}
+              disabled={isGeneratingDiagram || !diagramDescription.trim()}
+              className="w-full py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+            >
+              {isGeneratingDiagram ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  生成中...
+                </>
+              ) : (
+                <>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  生成 {getDiagramTypeName(selectedDiagramType)}
+                </>
+              )}
+            </button>
+          </div>
+        )}
+
+        {/* 已生成的图表列表 */}
+        {generatedDiagrams.length > 0 && (
+          <div className="mt-6 pt-6 border-t border-indigo-200">
+            <h5 className="text-sm font-bold text-slate-700 mb-3">已生成图表 ({generatedDiagrams.length})</h5>
+            <div className="space-y-4">
+              {generatedDiagrams.map((diagram, idx) => (
+                <div key={idx} className="bg-white rounded-xl border border-slate-200 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-sm font-semibold text-slate-900">
+                      {getDiagramTypeName(diagram.type)}
+                    </span>
+                    <button
+                      onClick={() => handleRemoveDiagram(idx)}
+                      className="text-red-600 hover:text-red-800 text-xs font-semibold"
+                    >
+                      删除
+                    </button>
+                  </div>
+                  {diagram.language === 'mermaid' ? (
+                    <MermaidRenderer code={diagram.code} />
+                  ) : (
+                    <div className="bg-slate-50 p-3 rounded-lg">
+                      <pre className="text-xs text-slate-700 overflow-x-auto">{diagram.code}</pre>
+                      <p className="text-xs text-slate-500 mt-2">
+                        PlantUML 代码已生成，可复制到 <a href="http://www.plantuml.com/plantuml" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">plantuml.com</a> 在线渲染
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {isGenerating ? (

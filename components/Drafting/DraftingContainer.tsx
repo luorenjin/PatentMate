@@ -213,6 +213,7 @@ const DraftingContainer: React.FC<DraftingContainerProps> = ({
         return (
           <DrawingsGenerator
             embodimentsJson={progress.embodiment.content}
+            patentData={patentData}
             stageData={progress.drawings}
             onUpdate={(content) => updateStageData('drawings', content)}
             onConfirm={() => confirmStage('drawings')}
