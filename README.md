@@ -46,7 +46,7 @@ PatentMate 是一款 AI 驱动的专利撰写 SaaS 应用，集成 Google Gemini
 npm install
 
 # 2. 配置环境变量
-cp .env.local.example .env.local
+cp .env.example .env.local
 # 编辑 .env.local，填入必要的 API Key
 
 # 3. 启动开发服务器
@@ -61,7 +61,7 @@ npm run preview    # 预览生产版本
 
 ## 环境变量配置
 
-复制 `.env.local.example` 为 `.env.local` 并按需填写：
+复制 `.env.example` 为 `.env.local` 并按需填写：
 
 ### 认证配置（Supabase）
 
@@ -72,6 +72,26 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 ```
 
 > 若未配置 Supabase，应用将在本地模式下运行（跳过登录，数据保存到 localStorage）。
+
+#### 邮件回跳配置
+
+为避免注册激活或密码重置邮件回跳后出现无效 hash、错误路由或一次性链接失效，请在 Supabase 后台额外完成以下配置：
+
+1. 在 Auth → URL Configuration 中，将应用地址同时加入 `Site URL` 和 `Additional Redirect URLs`
+2. 本地开发至少加入 `http://localhost:3000`
+3. 生产环境加入实际域名，例如 `https://your-app.example.com`
+
+推荐将邮件模板中的确认链接改为基于 `token_hash` 的前端确认流，当前前端代码已兼容该模式：
+
+```text
+# 注册激活邮件
+{{ .SiteURL }}?token_hash={{ .TokenHash }}&type=signup&auth_action=confirm
+
+# 密码重置邮件
+{{ .SiteURL }}?token_hash={{ .TokenHash }}&type=recovery&auth_action=recovery
+```
+
+这样前端会自行完成 `verifyOtp` / `setSession`，并正确展示错误信息、进入重置密码页以及清理地址栏参数。
 
 ### AI 提供商配置
 

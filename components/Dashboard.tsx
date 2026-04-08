@@ -30,9 +30,18 @@ const MILESTONE_ORDER: Record<PatentStatus, number> = {
 interface DashboardProps {
     onOpenPatent: (patent: PatentData) => void;
     onCreateNew: () => void;
+    currentUserId?: string | null;
+    currentOrganizationId?: string | null;
+    currentOrganizationName?: string | null;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
+const Dashboard: React.FC<DashboardProps> = ({
+    onOpenPatent,
+    onCreateNew,
+    currentUserId,
+    currentOrganizationId,
+    currentOrganizationName,
+}) => {
     const [patents, setPatents] = useState<PatentData[]>([]);
     const [deleteCandidateId, setDeleteCandidateId] = useState<string | null>(null);
     const [activeFilter, setActiveFilter] = useState<'all' | BusinessStageKey>('all');
@@ -225,14 +234,24 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
     );
 
     const loadPatents = () => {
-        const data = getPatents();
+        const data = getPatents().filter((patent) => {
+            if (currentOrganizationId) {
+                return patent.organizationId === currentOrganizationId;
+            }
+
+            if (currentUserId) {
+                return patent.userId === currentUserId;
+            }
+
+            return true;
+        });
         // Sort by last modified descending
         setPatents(data.sort((a, b) => b.lastModified - a.lastModified));
     };
 
     useEffect(() => {
         loadPatents();
-    }, []);
+    }, [currentOrganizationId, currentUserId]);
 
     const handleDeleteClick = (e: React.MouseEvent, id: string) => {
         e.stopPropagation();
@@ -253,6 +272,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onOpenPatent, onCreateNew }) => {
                 <div>
                     <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">工作台</h1>
                     <p className="text-slate-500 mt-2">围绕技术交底、方案评估、申请撰写和审校定稿管理您的项目</p>
+                    {currentOrganizationName && (
+                        <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-sm text-sky-700">
+                            <span className="font-medium">当前组织</span>
+                            <span>{currentOrganizationName}</span>
+                        </div>
+                    )}
                 </div>
                 <button 
                     onClick={onCreateNew}

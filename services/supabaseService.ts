@@ -1,9 +1,11 @@
 import {
   createClient,
+  type EmailOtpType,
   type Session,
   type SupabaseClient,
   type User,
 } from "@supabase/supabase-js";
+import type { AuthNotice, AuthView } from "../types";
 import { generateUuid } from "./idService";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
@@ -17,9 +19,39 @@ const AUTH_ROLE = "authenticated";
 const SESSION_DURATION_SECONDS = 60 * 60 * 24 * 7;
 const SUPABASE_PLACEHOLDER_HOST = "your-project.supabase.co";
 const SUPABASE_PLACEHOLDER_KEY = "your-anon-key";
+const AUTH_ACTION_QUERY_KEY = "auth_action";
+const AUTH_ACTION_CONFIRM = "confirm";
+const AUTH_ACTION_RECOVERY = "recovery";
+const KNOWN_AUTH_SEARCH_PARAMS = new Set([
+  "code",
+  "token_hash",
+  "type",
+  AUTH_ACTION_QUERY_KEY,
+]);
+const KNOWN_AUTH_HASH_PARAMS = new Set([
+  "access_token",
+  "refresh_token",
+  "expires_at",
+  "expires_in",
+  "provider_token",
+  "provider_refresh_token",
+  "token_type",
+  "type",
+  "error",
+  "error_code",
+  "error_description",
+  "state",
+  "sb",
+]);
 const authStateListeners = new Set<
   (event: string, session: Session | null) => void
 >();
+
+export interface AuthCallbackResult {
+  session: Session | null;
+  nextAuthView: AuthView | null;
+  notice: AuthNotice | null;
+}
 
 interface MockAuthUserRecord {
   id: string;
@@ -78,13 +110,93 @@ export const supabase: SupabaseClient | null = supabaseConfigured
       auth: {
         autoRefreshToken: true,
         persistSession: true,
-        detectSessionInUrl: true,
+        detectSessionInUrl: false,
       },
     })
   : null;
 
 const createValidationError = (message: string): Error => {
   return new Error(message);
+};
+
+const decodeUrlValue = (value: string | null): string => {
+  if (!value) {
+    return "";
+  }
+
+  try {
+    return decodeURIComponent(value.replace(/\+/g, " "));
+  } catch {
+    return value;
+  }
+};
+
+const createAuthNotice = (
+  tone: AuthNotice["tone"],
+  message: string,
+): AuthNotice => {
+  return { tone, message };
+};
+
+const buildAuthRedirectUrl = (
+  action: typeof AUTH_ACTION_CONFIRM | typeof AUTH_ACTION_RECOVERY,
+): string => {
+  const url = new URL(window.location.href);
+  url.hash = "";
+  url.search = "";
+  url.searchParams.set(AUTH_ACTION_QUERY_KEY, action);
+  return url.toString();
+};
+
+const replaceBrowserUrlWithoutAuthParams = (): void => {
+  const url = new URL(window.location.href);
+
+  Array.from(url.searchParams.keys()).forEach((key) => {
+    if (KNOWN_AUTH_SEARCH_PARAMS.has(key)) {
+      url.searchParams.delete(key);
+    }
+  });
+
+  const hashParams = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
+  Array.from(hashParams.keys()).forEach((key) => {
+    if (KNOWN_AUTH_HASH_PARAMS.has(key)) {
+      hashParams.delete(key);
+    }
+  });
+
+  const nextHash = hashParams.toString();
+  url.hash = nextHash ? `#${nextHash}` : "";
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+  window.history.replaceState({}, document.title, nextUrl);
+};
+
+const resolveAuthCallbackMode = (
+  authType: string | null,
+  authAction: string | null,
+): "signup" | "recovery" | null => {
+  if (authType === "recovery" || authAction === AUTH_ACTION_RECOVERY) {
+    return "recovery";
+  }
+
+  if (authType === "signup" || authAction === AUTH_ACTION_CONFIRM) {
+    return "signup";
+  }
+
+  return null;
+};
+
+const getCallbackSuccessNotice = (
+  mode: "signup" | "recovery" | null,
+): AuthNotice | null => {
+  if (mode === "signup") {
+    return createAuthNotice("success", "邮箱验证成功，账户已激活。");
+  }
+
+  if (mode === "recovery") {
+    return createAuthNotice("info", "验证通过，请设置新密码。");
+  }
+
+  return null;
 };
 
 /**
@@ -97,45 +209,253 @@ export const translateAuthErrorMessage = (message: string): string => {
     return "操作失败，请稍后重试";
   }
 
-  if (message.includes("Invalid login credentials")) {
+  const normalizedMessage = decodeUrlValue(message);
+
+  if (normalizedMessage.includes("Invalid login credentials")) {
     return "邮箱或密码错误";
   }
 
-  if (message.includes("Email not confirmed")) {
+  if (normalizedMessage.includes("Email not confirmed")) {
     return "请先验证邮箱后再登录";
   }
 
   if (
-    message.includes("User already registered") ||
-    message.includes("already registered")
+    normalizedMessage.includes("User already registered") ||
+    normalizedMessage.includes("already registered")
   ) {
     return "该邮箱已被注册";
   }
 
   if (
-    message.includes("Please provide a valid email") ||
-    message.includes("valid email")
+    normalizedMessage.includes("Please provide a valid email") ||
+    normalizedMessage.includes("valid email")
   ) {
     return "请输入有效的邮箱地址";
   }
 
-  if (message.includes("User not found") || message.includes("not found")) {
+  if (
+    normalizedMessage.includes("User not found") ||
+    normalizedMessage.includes("not found")
+  ) {
     return "该邮箱未注册";
   }
 
-  if (message.includes("No active session")) {
+  if (normalizedMessage.includes("Member already exists")) {
+    return "该成员已在组织中";
+  }
+
+  if (normalizedMessage.includes("Member not found")) {
+    return "未找到该成员，请刷新后重试";
+  }
+
+  if (normalizedMessage.includes("Plan member limit reached")) {
+    return "当前 Plan 成员席位已满，请先升级计划后再添加成员";
+  }
+
+  if (normalizedMessage.includes("Plan admin limit reached")) {
+    return "当前 Plan 管理员配额已满，请升级计划后再分配管理员角色";
+  }
+
+  if (normalizedMessage.includes("Role not allowed for current plan")) {
+    return "当前 Plan 不支持该角色，请升级计划后再使用";
+  }
+
+  if (normalizedMessage.includes("Plan downgrade blocked by assigned roles")) {
+    return "目标 Plan 不支持当前组织中的部分角色，请先调整成员角色";
+  }
+
+  if (normalizedMessage.includes("Plan downgrade blocked by member count")) {
+    return "当前成员数量超过目标 Plan 上限，请先减少成员或保留当前计划";
+  }
+
+  if (normalizedMessage.includes("Plan downgrade blocked by admin count")) {
+    return "当前管理员数量超过目标 Plan 上限，请先调整管理员数量";
+  }
+
+  if (normalizedMessage.includes("User profile not found")) {
+    return "当前账户资料不存在，请重新登录后再试";
+  }
+
+  if (normalizedMessage.includes("Organization not found")) {
+    return "未找到当前组织，请重新登录后再试";
+  }
+
+  if (normalizedMessage.includes("No active session")) {
     return "当前未登录，请重新登录后再试";
   }
 
   if (
-    message.includes("Failed to fetch") ||
-    message.includes("NetworkError") ||
-    message.includes("ERR_NAME_NOT_RESOLVED")
+    normalizedMessage.includes("Email link is invalid or has expired") ||
+    normalizedMessage.includes("otp_expired")
+  ) {
+    return "邮件确认链接无效或已过期，请重新发送验证邮件。";
+  }
+
+  if (normalizedMessage.includes("access_denied")) {
+    return "认证被拒绝，请重新尝试当前操作。";
+  }
+
+  if (normalizedMessage.includes("Token has expired")) {
+    return "验证令牌已过期，请重新发起操作。";
+  }
+
+  if (
+    normalizedMessage.includes("Failed to fetch") ||
+    normalizedMessage.includes("NetworkError") ||
+    normalizedMessage.includes("ERR_NAME_NOT_RESOLVED")
   ) {
     return "网络连接失败，请稍后重试";
   }
 
-  return message;
+  return normalizedMessage;
+};
+
+/**
+ * 处理 Supabase 邮件确认与密码恢复回跳，统一消费 URL 中的认证参数并清理地址栏。
+ * @returns 包含会话、建议显示的认证视图以及界面提示。
+ */
+export const handleAuthCallback = async (): Promise<AuthCallbackResult> => {
+  try {
+    if (!supabase) {
+      return {
+        session: null,
+        nextAuthView: null,
+        notice: null,
+      };
+    }
+
+    const url = new URL(window.location.href);
+    const searchParams = url.searchParams;
+    const hashParams = new URLSearchParams(
+      url.hash.startsWith("#") ? url.hash.slice(1) : url.hash,
+    );
+
+    const authAction = searchParams.get(AUTH_ACTION_QUERY_KEY);
+    const authType = searchParams.get("type") ?? hashParams.get("type");
+    const authMode = resolveAuthCallbackMode(authType, authAction);
+    const errorDescription =
+      hashParams.get("error_description") ?? searchParams.get("error_description");
+    const errorCode = hashParams.get("error_code") ?? searchParams.get("error");
+
+    if (errorDescription || errorCode) {
+      replaceBrowserUrlWithoutAuthParams();
+      return {
+        session: null,
+        nextAuthView: "LOGIN",
+        notice: createAuthNotice(
+          "error",
+          translateAuthErrorMessage(errorDescription || errorCode || ""),
+        ),
+      };
+    }
+
+    const tokenHash = searchParams.get("token_hash");
+    if (tokenHash && authType) {
+      const { data, error } = await supabase.auth.verifyOtp({
+        type: authType as EmailOtpType,
+        token_hash: tokenHash,
+      });
+
+      replaceBrowserUrlWithoutAuthParams();
+
+      if (error) {
+        return {
+          session: null,
+          nextAuthView: "LOGIN",
+          notice: createAuthNotice(
+            "error",
+            translateAuthErrorMessage(error.message),
+          ),
+        };
+      }
+
+      return {
+        session: data.session ?? null,
+        nextAuthView: authMode === "recovery" ? "PASSWORD_UPDATE" : null,
+        notice: getCallbackSuccessNotice(authMode),
+      };
+    }
+
+    const authCode = searchParams.get("code");
+    if (authCode) {
+      const { data, error } = await supabase.auth.exchangeCodeForSession(authCode);
+
+      replaceBrowserUrlWithoutAuthParams();
+
+      if (error) {
+        return {
+          session: null,
+          nextAuthView: "LOGIN",
+          notice: createAuthNotice(
+            "error",
+            translateAuthErrorMessage(error.message),
+          ),
+        };
+      }
+
+      return {
+        session: data.session,
+        nextAuthView: authMode === "recovery" ? "PASSWORD_UPDATE" : null,
+        notice: getCallbackSuccessNotice(authMode),
+      };
+    }
+
+    const accessToken = hashParams.get("access_token");
+    const refreshToken = hashParams.get("refresh_token");
+    if (accessToken && refreshToken) {
+      const { data, error } = await supabase.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+
+      replaceBrowserUrlWithoutAuthParams();
+
+      if (error) {
+        return {
+          session: null,
+          nextAuthView: "LOGIN",
+          notice: createAuthNotice(
+            "error",
+            translateAuthErrorMessage(error.message),
+          ),
+        };
+      }
+
+      return {
+        session: data.session,
+        nextAuthView: authMode === "recovery" ? "PASSWORD_UPDATE" : null,
+        notice: getCallbackSuccessNotice(authMode),
+      };
+    }
+
+    if (authAction) {
+      replaceBrowserUrlWithoutAuthParams();
+      const session = await getSession();
+      return {
+        session,
+        nextAuthView:
+          authMode === "recovery" && session ? "PASSWORD_UPDATE" : null,
+        notice: session ? getCallbackSuccessNotice(authMode) : null,
+      };
+    }
+
+    return {
+      session: null,
+      nextAuthView: null,
+      notice: null,
+    };
+  } catch (error) {
+    console.error("handleAuthCallback failed:", error);
+    replaceBrowserUrlWithoutAuthParams();
+    return {
+      session: null,
+      nextAuthView: "LOGIN",
+      notice: createAuthNotice(
+        "error",
+        translateAuthErrorMessage((error as Error).message),
+      ),
+    };
+  }
 };
 
 const shouldFallbackToMock = (error: unknown): boolean => {
@@ -354,7 +674,7 @@ export const signUp = async (
       email: normalizedEmail,
       password,
       options: {
-        emailRedirectTo: window.location.origin,
+        emailRedirectTo: buildAuthRedirectUrl(AUTH_ACTION_CONFIRM),
       },
     });
 
@@ -461,7 +781,7 @@ export const resetPassword = async (
     const { error } = await supabase.auth.resetPasswordForEmail(
       normalizedEmail,
       {
-        redirectTo: `${window.location.origin}/reset-password`,
+        redirectTo: buildAuthRedirectUrl(AUTH_ACTION_RECOVERY),
       },
     );
 
@@ -472,6 +792,46 @@ export const resetPassword = async (
     return { error: null };
   } catch (error) {
     console.error("resetPassword failed:", error);
+    return { error: error as Error };
+  }
+};
+
+/**
+ * 重新发送注册确认邮件，便于处理邮件链接过期或未收到邮件的情况。
+ * @param email 用户邮箱。
+ * @returns 成功返回空错误；失败时返回错误对象。
+ */
+export const resendConfirmationEmail = async (
+  email: string,
+): Promise<{ error: Error | null }> => {
+  try {
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!isValidEmail(normalizedEmail)) {
+      return {
+        error: createValidationError('Please provide a valid email'),
+      };
+    }
+
+    if (!supabase) {
+      return { error: null };
+    }
+
+    const { error } = await supabase.auth.resend({
+      type: 'signup',
+      email: normalizedEmail,
+      options: {
+        emailRedirectTo: buildAuthRedirectUrl(AUTH_ACTION_CONFIRM),
+      },
+    });
+
+    if (error) {
+      return { error };
+    }
+
+    return { error: null };
+  } catch (error) {
+    console.error('resendConfirmationEmail failed:', error);
     return { error: error as Error };
   }
 };

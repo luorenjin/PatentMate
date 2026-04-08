@@ -1,27 +1,40 @@
 import React, { useState } from 'react';
-import { signIn, translateAuthErrorMessage } from '../../services/supabaseService';
+import {
+  resendConfirmationEmail,
+  signIn,
+  translateAuthErrorMessage,
+} from '../../services/supabaseService';
+import type { AuthNotice } from '../../types';
 
 interface LoginProps {
   onSwitchToRegister: () => void;
   onSwitchToReset: () => void;
   onLoginSuccess: () => void;
   isConfigured: boolean;
+  notice?: AuthNotice | null;
+  onClearNotice?: () => void;
 }
 
 const Login: React.FC<LoginProps> = ({
   onSwitchToRegister,
   onSwitchToReset,
   onLoginSuccess,
-  isConfigured
+  isConfigured,
+  notice,
+  onClearNotice
 }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [assistMessage, setAssistMessage] = useState<string | null>(null);
+  const [isResending, setIsResending] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setAssistMessage(null);
+    onClearNotice?.();
 
     if (!email || !password) {
       setError('请输入邮箱和密码');
@@ -47,6 +60,32 @@ const Login: React.FC<LoginProps> = ({
     }
   };
 
+  const handleResendConfirmation = async () => {
+    setError(null);
+    setAssistMessage(null);
+    onClearNotice?.();
+
+    if (!email) {
+      setError('请先填写邮箱地址');
+      return;
+    }
+
+    setIsResending(true);
+    try {
+      const { error: resendError } = await resendConfirmationEmail(email);
+      if (resendError) {
+        setError(translateAuthErrorMessage(resendError.message));
+        return;
+      }
+
+      setAssistMessage('新的激活邮件已发送，请检查邮箱。');
+    } catch (err) {
+      setError('激活邮件发送失败，请稍后重试');
+    } finally {
+      setIsResending(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-linear-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
       <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 max-w-md w-full border border-white/20">
@@ -56,9 +95,27 @@ const Login: React.FC<LoginProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {notice && (
+            <div className={`rounded-lg p-3 text-sm border ${
+              notice.tone === 'error'
+                ? 'bg-red-500/20 border-red-500/50 text-red-200'
+                : notice.tone === 'success'
+                  ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-200'
+                  : 'bg-sky-500/20 border-sky-500/50 text-sky-200'
+            }`}>
+              {notice.message}
+            </div>
+          )}
+
           {error && (
             <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 text-red-300 text-sm">
               {error}
+            </div>
+          )}
+
+          {assistMessage && (
+            <div className="bg-emerald-500/20 border border-emerald-500/50 rounded-lg p-3 text-emerald-200 text-sm">
+              {assistMessage}
             </div>
           )}
 
@@ -119,10 +176,21 @@ const Login: React.FC<LoginProps> = ({
 
         <div className="mt-6 flex flex-col gap-3">
           <button
-            onClick={onSwitchToReset}
+            onClick={() => {
+              onClearNotice?.();
+              onSwitchToReset();
+            }}
             className="text-sm text-slate-400 hover:text-slate-300 transition-colors"
           >
             忘记密码？
+          </button>
+
+          <button
+            onClick={handleResendConfirmation}
+            disabled={isResending}
+            className="text-sm text-slate-400 hover:text-slate-300 disabled:text-slate-600 transition-colors"
+          >
+            {isResending ? '发送中...' : '重新发送激活邮件'}
           </button>
 
           <div className="flex items-center gap-2">
@@ -132,7 +200,10 @@ const Login: React.FC<LoginProps> = ({
           </div>
 
           <button
-            onClick={onSwitchToRegister}
+            onClick={() => {
+              onClearNotice?.();
+              onSwitchToRegister();
+            }}
             className="w-full py-3 bg-white/10 hover:bg-white/20 text-white font-medium rounded-lg transition-all border border-white/10"
           >
             注册新账户

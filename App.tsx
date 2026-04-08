@@ -1,9 +1,24 @@
-import React, { Suspense, lazy, useState, useEffect } from 'react';
+import { type User } from '@supabase/supabase-js';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import Sidebar from './components/Sidebar';
-import { AppView, PatentData, AuthView } from './types';
+import { AppView, type AuthNotice, type AuthView, type PatentData } from './types';
 import { savePatentToStorage, createNewPatentData } from './services/storageService';
-import { isSupabaseConfigured, getSession, onAuthStateChange, signOut as supabaseSignOut } from './services/supabaseService';
-import { getOrCreateDefaultOrganization, associatePatentsWithUser } from './services/organizationService';
+import {
+  getSession,
+  handleAuthCallback,
+  isSupabaseConfigured,
+  onAuthStateChange,
+  signOut as supabaseSignOut,
+} from './services/supabaseService';
+import {
+  associatePatentsWithUser,
+  getOrCreateDefaultOrganization,
+  syncOrganizationOwnerMember,
+} from './services/organizationService';
+import {
+  ensureUserProfile,
+  type UserProfile,
+} from './services/userProfileService';
 import { canNavigateToWorkflowStage, getRecommendedViewForPatent } from './workflow';
 
 const ChatAssistant = lazy(() => import('./components/ChatAssistant'));
@@ -13,7 +28,6 @@ const Editor = lazy(() => import('./components/Editor'));
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const PatentDraft = lazy(() => import('./components/PatentDraft'));
 
-// Auth components
 const Login = lazy(() => import('./components/Auth/Login'));
 const Register = lazy(() => import('./components/Auth/Register'));
 const PasswordReset = lazy(() => import('./components/Auth/PasswordReset'));
@@ -24,240 +38,351 @@ const App: React.FC = () => {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [patentData, setPatentData] = useState<PatentData | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
+  const [authNotice, setAuthNotice] = useState<AuthNotice | null>(null);
 
-  // Auth state
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [authView, setAuthView] = useState<AuthView>('LOGIN');
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
+  const [currentOrgName, setCurrentOrgName] = useState<string | null>(null);
+  const [currentUserProfile, setCurrentUserProfile] = useState<UserProfile | null>(null);
 
   const supabaseConfigured = isSupabaseConfigured();
 
-  // Check auth on mount
+  const clearAuthContext = () => {
+    setIsAuthenticated(false);
+    setCurrentUserId(null);
+    setCurrentOrgId(null);
+    setCurrentOrgName(null);
+    setCurrentUserProfile(null);
+  };
+
+  const showNotification = (message: string) => {
+    setNotification(message);
+    window.setTimeout(() => setNotification(null), 3000);
+  };
+
+  const syncAuthenticatedUser = async (user: User | null) => {
+    if (!user) {
+      clearAuthContext();
+      return;
+    }
+
+    const profile = await ensureUserProfile(user);
+    const organization = getOrCreateDefaultOrganization(user.id, {
+      ownerEmail: user.email ?? '',
+      ownerName: profile.name,
+      ownerTitle: profile.jobTitle,
+      preferredName: profile.defaultOrganizationName,
+    });
+    const syncedOrganization = syncOrganizationOwnerMember(organization.id, {
+      userId: user.id,
+      email: user.email ?? organization.ownerEmail,
+      name: profile.name,
+      title: profile.jobTitle,
+    }) || organization;
+
+    setIsAuthenticated(true);
+    setCurrentUserId(user.id);
+    setCurrentOrgId(syncedOrganization.id);
+    setCurrentOrgName(syncedOrganization.name);
+    setCurrentUserProfile(profile);
+
+    associatePatentsWithUser(user.id, syncedOrganization.id);
+  };
+
   useEffect(() => {
-    const checkAuth = async () => {
-      const session = await getSession();
-      if (session?.user) {
-        setIsAuthenticated(true);
-        setCurrentUserId(session.user.id);
+    let isMounted = true;
 
-        // Get or create default organization
-        const org = getOrCreateDefaultOrganization(session.user.id);
-        setCurrentOrgId(org.id);
-
-        // Associate existing patents with user
-        associatePatentsWithUser(session.user.id, org.id);
-      } else {
-        setIsAuthenticated(false);
+    const initializeAuth = async () => {
+      const callbackResult = await handleAuthCallback();
+      if (!isMounted) {
+        return;
       }
+
+      if (callbackResult.notice) {
+        setAuthNotice(callbackResult.notice);
+      }
+
+      if (callbackResult.nextAuthView) {
+        setAuthView(callbackResult.nextAuthView);
+      }
+
+      const session = callbackResult.session ?? (await getSession());
+      if (!isMounted) {
+        return;
+      }
+
+      await syncAuthenticatedUser(session?.user ?? null);
     };
 
-    checkAuth();
+    void initializeAuth();
 
-    // Listen for auth changes
     const unsubscribe = onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN' && session?.user) {
-        setIsAuthenticated(true);
-        setCurrentUserId(session.user.id);
+      if (!isMounted) {
+        return;
+      }
 
-        // Get or create default organization
-        const org = getOrCreateDefaultOrganization(session.user.id);
-        setCurrentOrgId(org.id);
+      if (event === 'SIGNED_OUT') {
+        clearAuthContext();
+        setAuthView('LOGIN');
+        return;
+      }
 
-        // Associate existing patents with user
-        associatePatentsWithUser(session.user.id, org.id);
-      } else if (event === 'SIGNED_OUT') {
-        setIsAuthenticated(false);
-        setCurrentUserId(null);
-        setCurrentOrgId(null);
+      if (event === 'PASSWORD_RECOVERY') {
+        setAuthView('PASSWORD_UPDATE');
+        setAuthNotice({ tone: 'info', message: '验证通过，请设置新密码。' });
+      }
+
+      if (session?.user) {
+        void syncAuthenticatedUser(session.user);
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, []);
 
   const handleLoginSuccess = () => {
-    // Auth state change listener will handle this
+    setAuthNotice(null);
   };
 
   const handleRegisterSuccess = () => {
     setAuthView('LOGIN');
+    setAuthNotice({
+      tone: 'info',
+      message: '验证邮件已发送，请到邮箱完成激活。',
+    });
+  };
+
+  const handlePasswordUpdated = () => {
+    setAuthView('LOGIN');
+    setAuthNotice(null);
+    showNotification('密码已更新');
   };
 
   const handleSignOut = async () => {
     await supabaseSignOut();
-    setIsAuthenticated(false);
-    setCurrentUserId(null);
-    setCurrentOrgId(null);
+    setAuthNotice(null);
+    clearAuthContext();
     setPatentData(null);
     setCurrentView(AppView.DASHBOARD);
   };
 
   const updatePatentData = (key: keyof PatentData, value: any) => {
-    if (!patentData) return;
-    setPatentData(prev => prev ? ({ ...prev, [key]: value, userId: currentUserId || prev.userId, organizationId: currentOrgId || prev.organizationId }) : null);
+    if (!patentData) {
+      return;
+    }
+
+    setPatentData((previous) =>
+      previous
+        ? {
+            ...previous,
+            [key]: value,
+            userId: currentUserId || previous.userId,
+            organizationId: currentOrgId || previous.organizationId,
+          }
+        : null,
+    );
   };
 
   const handleSave = () => {
-      if (patentData) {
-          savePatentToStorage(patentData);
-          showNotification("保存成功！已存入草稿箱");
-      }
-  };
-
-  const handleCreateNew = () => {
-      const newPatent = createNewPatentData();
-      // Associate with current user and organization
-      if (currentUserId) {
-        newPatent.userId = currentUserId;
-      }
-      if (currentOrgId) {
-        newPatent.organizationId = currentOrgId;
-      }
-      setPatentData(newPatent);
-      setCurrentView(AppView.DISCLOSURE);
-  };
-
-  const handleOpenPatent = (patent: PatentData) => {
-      setPatentData(patent);
-      setCurrentView(getRecommendedViewForPatent(patent));
-  };
-
-  const handleBackToDashboard = () => {
-      // Auto save when going back
-      if (patentData) {
-          savePatentToStorage(patentData);
-      }
-      setPatentData(null);
-      setCurrentView(AppView.DASHBOARD);
-  };
-
-  // Handle sidebar navigation clicks
-  const handleSidebarNavigation = (view: AppView) => {
-      const getNavigationStatus = (targetView: AppView, currentPatent: PatentData) => {
-          if (currentPatent.status === 'ready_to_submit') return currentPatent.status;
-
-          switch (targetView) {
-            case AppView.NOVELTY_SEARCH:
-              return currentPatent.status === 'disclosure_collecting' ? 'disclosure_review' : currentPatent.status;
-            case AppView.DRAFTER:
-              return currentPatent.status === 'disclosure_collecting' || currentPatent.status === 'disclosure_review'
-                ? 'drafting'
-                : currentPatent.status;
-            case AppView.EDITOR:
-              return 'editing';
-            default:
-              return currentPatent.status;
-          }
-      };
-
-      if (view === AppView.DASHBOARD) {
-          handleBackToDashboard();
-      } else if (view === AppView.SETTINGS) {
-          setCurrentView(AppView.SETTINGS);
-      } else {
-          if (patentData) {
-              if (!canNavigateToWorkflowStage(view, patentData)) {
-                return;
-              }
-
-              const nextStatus = getNavigationStatus(view, patentData);
-              if (nextStatus !== patentData.status) {
-                setPatentData(prev => prev ? ({ ...prev, status: nextStatus }) : null);
-              }
-
-              setCurrentView(view);
-          }
-      }
-  };
-
-  const showNotification = (msg: string) => {
-      setNotification(msg);
-      setTimeout(() => setNotification(null), 3000);
-  };
-
-  // Render auth view
-  const renderAuthView = () => {
-    switch (authView) {
-      case 'REGISTER':
-        return (
-          <Register
-            onSwitchToLogin={() => setAuthView('LOGIN')}
-            onRegisterSuccess={handleRegisterSuccess}
-            isConfigured={supabaseConfigured}
-          />
-        );
-      case 'PASSWORD_RESET':
-        return (
-          <PasswordReset
-            onSwitchToLogin={() => setAuthView('LOGIN')}
-            isConfigured={supabaseConfigured}
-          />
-        );
-      default:
-        return (
-          <Login
-            onSwitchToRegister={() => setAuthView('REGISTER')}
-            onSwitchToReset={() => setAuthView('PASSWORD_RESET')}
-            onLoginSuccess={handleLoginSuccess}
-            isConfigured={supabaseConfigured}
-          />
-        );
+    if (patentData) {
+      savePatentToStorage(patentData);
+      showNotification('保存成功！已存入草稿箱');
     }
   };
 
-  // Render main app view
-  const renderView = () => {
-    // Settings view
-    if (currentView === AppView.SETTINGS && currentOrgId) {
+  const handleCreateNew = () => {
+    const newPatent = createNewPatentData();
+    if (currentUserId) {
+      newPatent.userId = currentUserId;
+    }
+    if (currentOrgId) {
+      newPatent.organizationId = currentOrgId;
+    }
+    setPatentData(newPatent);
+    setCurrentView(AppView.DISCLOSURE);
+  };
+
+  const handleOpenPatent = (patent: PatentData) => {
+    setPatentData(patent);
+    setCurrentView(getRecommendedViewForPatent(patent));
+  };
+
+  const handleBackToDashboard = () => {
+    if (patentData) {
+      savePatentToStorage(patentData);
+    }
+    setPatentData(null);
+    setCurrentView(AppView.DASHBOARD);
+  };
+
+  const handleSidebarNavigation = (view: AppView) => {
+    const getNavigationStatus = (targetView: AppView, currentPatent: PatentData) => {
+      if (currentPatent.status === 'ready_to_submit') {
+        return currentPatent.status;
+      }
+
+      switch (targetView) {
+        case AppView.NOVELTY_SEARCH:
+          return currentPatent.status === 'disclosure_collecting'
+            ? 'disclosure_review'
+            : currentPatent.status;
+        case AppView.DRAFTER:
+          return currentPatent.status === 'disclosure_collecting' || currentPatent.status === 'disclosure_review'
+            ? 'drafting'
+            : currentPatent.status;
+        case AppView.EDITOR:
+          return 'editing';
+        default:
+          return currentPatent.status;
+      }
+    };
+
+    if (view === AppView.DASHBOARD) {
+      handleBackToDashboard();
+      return;
+    }
+
+    if (view === AppView.SETTINGS) {
+      setCurrentView(AppView.SETTINGS);
+      return;
+    }
+
+    if (!patentData) {
+      return;
+    }
+
+    if (!canNavigateToWorkflowStage(view, patentData)) {
+      return;
+    }
+
+    const nextStatus = getNavigationStatus(view, patentData);
+    if (nextStatus !== patentData.status) {
+      setPatentData((previous) =>
+        previous ? { ...previous, status: nextStatus } : null,
+      );
+    }
+
+    setCurrentView(view);
+  };
+
+  const renderAuthView = () => {
+    if (authView === 'REGISTER') {
       return (
-        <OrganizationSettings
-          organizationId={currentOrgId}
-          onBack={() => setCurrentView(AppView.DASHBOARD)}
+        <Register
+          onSwitchToLogin={() => setAuthView('LOGIN')}
+          onRegisterSuccess={handleRegisterSuccess}
+          isConfigured={supabaseConfigured}
+          notice={authNotice}
+          onClearNotice={() => setAuthNotice(null)}
         />
       );
     }
 
-    // If no patent loaded, force Dashboard
-    if (!patentData) {
-        return <Dashboard onOpenPatent={handleOpenPatent} onCreateNew={handleCreateNew} />;
+    if (authView === 'PASSWORD_RESET' || authView === 'PASSWORD_UPDATE') {
+      return (
+        <PasswordReset
+          mode={authView === 'PASSWORD_UPDATE' ? 'update' : 'request'}
+          onSwitchToLogin={() => setAuthView('LOGIN')}
+          isConfigured={supabaseConfigured}
+          notice={authNotice}
+          onClearNotice={() => setAuthNotice(null)}
+          onPasswordUpdated={handlePasswordUpdated}
+        />
+      );
     }
 
-    // If patent loaded, check view
+    return (
+      <Login
+        onSwitchToRegister={() => setAuthView('REGISTER')}
+        onSwitchToReset={() => setAuthView('PASSWORD_RESET')}
+        onLoginSuccess={handleLoginSuccess}
+        isConfigured={supabaseConfigured}
+        notice={authNotice}
+        onClearNotice={() => setAuthNotice(null)}
+      />
+    );
+  };
+
+  const renderView = () => {
+    if (currentView === AppView.SETTINGS && currentOrgId && currentUserId) {
+      return (
+        <OrganizationSettings
+          organizationId={currentOrgId}
+          userId={currentUserId}
+          onBack={() => setCurrentView(AppView.DASHBOARD)}
+          onOrganizationUpdated={(organization) => setCurrentOrgName(organization.name)}
+          onProfileUpdated={(profile) => setCurrentUserProfile(profile)}
+        />
+      );
+    }
+
+    if (!patentData) {
+      return (
+        <Dashboard
+          onOpenPatent={handleOpenPatent}
+          onCreateNew={handleCreateNew}
+          currentUserId={currentUserId}
+          currentOrganizationId={currentOrgId}
+          currentOrganizationName={currentOrgName}
+        />
+      );
+    }
+
     switch (currentView) {
       case AppView.DASHBOARD:
-         return <Dashboard onOpenPatent={handleOpenPatent} onCreateNew={handleCreateNew} />;
+        return (
+          <Dashboard
+            onOpenPatent={handleOpenPatent}
+            onCreateNew={handleCreateNew}
+            currentUserId={currentUserId}
+            currentOrganizationId={currentOrgId}
+            currentOrganizationName={currentOrgName}
+          />
+        );
       case AppView.DISCLOSURE:
-         return <PatentDraft
-                  patentData={patentData}
-                  updatePatentData={updatePatentData}
-                  onNext={() => setCurrentView(AppView.NOVELTY_SEARCH)}
-                  onBack={() => setCurrentView(AppView.DASHBOARD)}
-                />;
+        return (
+          <PatentDraft
+            patentData={patentData}
+            updatePatentData={updatePatentData}
+            onNext={() => setCurrentView(AppView.NOVELTY_SEARCH)}
+            onBack={() => setCurrentView(AppView.DASHBOARD)}
+          />
+        );
       case AppView.NOVELTY_SEARCH:
-        return <NoveltySearch
-                  patentData={patentData}
-                  updatePatentData={updatePatentData}
-                  setView={setCurrentView}
-                  onSave={handleSave}
-                  onBack={handleBackToDashboard}
-               />;
+        return (
+          <NoveltySearch
+            patentData={patentData}
+            updatePatentData={updatePatentData}
+            setView={setCurrentView}
+            onSave={handleSave}
+            onBack={handleBackToDashboard}
+          />
+        );
       case AppView.DRAFTER:
-        return <DraftingContainer
-                  patentData={patentData}
-                  updatePatentData={updatePatentData}
-                  setView={setCurrentView}
-                  onSave={handleSave}
-                  onBack={handleBackToDashboard}
-               />;
+        return (
+          <DraftingContainer
+            patentData={patentData}
+            updatePatentData={updatePatentData}
+            setView={setCurrentView}
+            onSave={handleSave}
+            onBack={handleBackToDashboard}
+          />
+        );
       case AppView.EDITOR:
-        return <Editor
-                  patentData={patentData}
-                  updatePatentData={updatePatentData}
-                  setView={setCurrentView}
-                  onSave={handleSave}
-                  onBack={handleBackToDashboard}
-               />;
+        return (
+          <Editor
+            patentData={patentData}
+            updatePatentData={updatePatentData}
+            setView={setCurrentView}
+            onSave={handleSave}
+            onBack={handleBackToDashboard}
+          />
+        );
       default:
         return null;
     }
@@ -267,7 +392,6 @@ const App: React.FC = () => {
     <div className="p-8 text-sm text-slate-500">正在加载当前工作区...</div>
   );
 
-  // Show loading while checking auth
   if (isAuthenticated === null) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -279,8 +403,7 @@ const App: React.FC = () => {
     );
   }
 
-  // Show auth view if not authenticated
-  if (!isAuthenticated) {
+  if (!isAuthenticated || authView === 'PASSWORD_UPDATE') {
     return (
       <Suspense fallback={
         <div className="min-h-screen bg-slate-900 flex items-center justify-center">
@@ -292,33 +415,56 @@ const App: React.FC = () => {
     );
   }
 
-  // Main app layout
   return (
     <div className="flex h-screen w-full bg-slate-50 font-sans">
       <Sidebar
-          currentView={currentView}
-          setView={handleSidebarNavigation}
-          patentData={patentData}
-          onSignOut={handleSignOut}
+        currentView={currentView}
+        setView={handleSidebarNavigation}
+        patentData={patentData}
+        onSignOut={handleSignOut}
       />
 
       <main className="flex-1 relative overflow-hidden flex flex-col">
-        <div className="flex-1 overflow-y-auto p-8 scroll-smooth">
+        <div className="flex-1 overflow-y-auto p-8 scroll-smooth space-y-6">
+          {authNotice && (
+            <div className={`rounded-2xl border px-5 py-4 text-sm ${
+              authNotice.tone === 'error'
+                ? 'border-red-200 bg-red-50 text-red-700'
+                : authNotice.tone === 'success'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : 'border-sky-200 bg-sky-50 text-sky-700'
+            }`}>
+              <div className="flex items-start justify-between gap-4">
+                <span>{authNotice.message}</span>
+                <button
+                  onClick={() => setAuthNotice(null)}
+                  className="text-xs font-medium opacity-70 hover:opacity-100"
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+          )}
+
           <Suspense fallback={fallback}>
             {renderView()}
           </Suspense>
         </div>
 
-        {/* Notification Toast */}
         {notification && (
-            <div className="absolute top-6 right-6 bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg z-50 animate-fade-in-down flex items-center gap-2">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                {notification}
-            </div>
+          <div className="absolute top-6 right-6 bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg z-50 animate-fade-in-down flex items-center gap-2">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+            {notification}
+          </div>
         )}
 
         <Suspense fallback={null}>
-          <ChatAssistant isOpen={isChatOpen} onToggle={() => setIsChatOpen(!isChatOpen)} currentView={currentView} patentData={patentData} />
+          <ChatAssistant
+            isOpen={isChatOpen}
+            onToggle={() => setIsChatOpen(!isChatOpen)}
+            currentView={currentView}
+            patentData={patentData}
+          />
         </Suspense>
       </main>
     </div>

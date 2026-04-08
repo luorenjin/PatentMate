@@ -7,7 +7,16 @@ export enum AppView {
   SETTINGS = "SETTINGS",
 }
 
-export type AuthView = "LOGIN" | "REGISTER" | "PASSWORD_RESET";
+export type AuthView =
+  | "LOGIN"
+  | "REGISTER"
+  | "PASSWORD_RESET"
+  | "PASSWORD_UPDATE";
+
+export interface AuthNotice {
+  tone: "success" | "error" | "info";
+  message: string;
+}
 
 export type PatentStatus =
   | "disclosure_collecting"

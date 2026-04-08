@@ -1,172 +1,918 @@
 import { generateUuid } from "./idService";
-import { PatentData, getPatents, savePatentToStorage } from "./storageService";
+import { getPatents, savePatentToStorage } from "./storageService";
 
 const ORGANIZATIONS_KEY = "patent_pro_organizations";
+const DEFAULT_ORGANIZATION_NAME = "我的团队";
+const ORGANIZATION_PLANS = ["free", "team", "enterprise"] as const;
+const ORGANIZATION_MEMBER_ROLES = [
+  "owner",
+  "admin",
+  "member",
+  "viewer",
+] as const;
+const ORGANIZATION_MEMBER_STATUSES = ["active", "invited"] as const;
+
+export type OrganizationPlan = (typeof ORGANIZATION_PLANS)[number];
+export type OrganizationMemberRole = (typeof ORGANIZATION_MEMBER_ROLES)[number];
+export type OrganizationMemberStatus =
+  (typeof ORGANIZATION_MEMBER_STATUSES)[number];
+
+export interface OrganizationMember {
+  id: string;
+  userId: string;
+  email: string;
+  name: string;
+  title: string;
+  role: OrganizationMemberRole;
+  status: OrganizationMemberStatus;
+  joinedAt: number;
+}
 
 export interface Organization {
   id: string;
   name: string;
+  description: string;
+  plan: OrganizationPlan;
   ownerId: string;
+  ownerEmail: string;
   members: OrganizationMember[];
   createdAt: number;
   lastModified: number;
 }
 
-export interface OrganizationMember {
-  id: string;
-  email: string;
-  role: "owner" | "admin" | "member";
-  joinedAt: number;
-}
-
 export interface CreateOrganizationInput {
   name: string;
   ownerId: string;
+  ownerEmail: string;
+  ownerName?: string;
+  ownerTitle?: string;
+  description?: string;
+  plan?: OrganizationPlan;
 }
 
-const normalizeOrganization = (org: Partial<Organization>): Organization => {
+export interface UpdateOrganizationInput {
+  name?: string;
+  description?: string;
+  plan?: OrganizationPlan;
+}
+
+export interface OrganizationMemberInput {
+  userId?: string;
+  email: string;
+  name?: string;
+  title?: string;
+  role?: OrganizationMemberRole;
+  status?: OrganizationMemberStatus;
+}
+
+export interface DefaultOrganizationOptions {
+  ownerEmail?: string;
+  ownerName?: string;
+  ownerTitle?: string;
+  preferredName?: string;
+}
+
+export interface OrganizationPlanLimits {
+  maxMembers: number | null;
+  maxAdmins: number | null;
+  allowedRoles: OrganizationMemberRole[];
+}
+
+export interface OrganizationPlanUsage {
+  totalMembers: number;
+  activeMembers: number;
+  invitedMembers: number;
+  adminMembers: number;
+  remainingMemberSlots: number | null;
+  remainingAdminSlots: number | null;
+}
+
+export interface OrganizationMutationResult {
+  organization: Organization | null;
+  error: Error | null;
+}
+
+const ORGANIZATION_PLAN_LIMITS: Record<OrganizationPlan, OrganizationPlanLimits> = {
+  free: {
+    maxMembers: 3,
+    maxAdmins: 1,
+    allowedRoles: ["owner", "member"],
+  },
+  team: {
+    maxMembers: 10,
+    maxAdmins: 3,
+    allowedRoles: ["owner", "admin", "member", "viewer"],
+  },
+  enterprise: {
+    maxMembers: null,
+    maxAdmins: null,
+    allowedRoles: ["owner", "admin", "member", "viewer"],
+  },
+};
+
+const normalizeString = (value: unknown): string => {
+  return typeof value === "string" ? value : "";
+};
+
+const normalizePlan = (value: unknown): OrganizationPlan => {
+  return ORGANIZATION_PLANS.includes(value as OrganizationPlan)
+    ? (value as OrganizationPlan)
+    : "free";
+};
+
+const normalizeRole = (value: unknown): OrganizationMemberRole => {
+  return ORGANIZATION_MEMBER_ROLES.includes(value as OrganizationMemberRole)
+    ? (value as OrganizationMemberRole)
+    : "member";
+};
+
+const normalizeStatus = (value: unknown): OrganizationMemberStatus => {
+  return ORGANIZATION_MEMBER_STATUSES.includes(
+    value as OrganizationMemberStatus,
+  )
+    ? (value as OrganizationMemberStatus)
+    : "active";
+};
+
+const hasFiniteLimit = (limit: number | null): limit is number => {
+  return typeof limit === "number";
+};
+
+const isManagerRole = (role: OrganizationMemberRole): boolean => {
+  return role === "owner" || role === "admin";
+};
+
+const isRoleAllowedForPlan = (
+  plan: OrganizationPlan,
+  role: OrganizationMemberRole,
+): boolean => {
+  return ORGANIZATION_PLAN_LIMITS[plan].allowedRoles.includes(role);
+};
+
+const normalizeMember = (
+  member: Partial<OrganizationMember>,
+): OrganizationMember => {
   const now = Date.now();
-  const normalizedMembers: OrganizationMember[] = Array.isArray(org.members)
-    ? org.members.map((m) => ({
-        id: m.id || generateUuid(),
-        email: m.email || "",
-        role: m.role || "member",
-        joinedAt: typeof m.joinedAt === "number" ? m.joinedAt : now,
-      }))
-    : [];
 
   return {
-    id: org.id || generateUuid(),
-    name: org.name || "未命名组织",
-    ownerId: org.ownerId || "",
-    members: normalizedMembers,
-    createdAt: typeof org.createdAt === "number" ? org.createdAt : now,
-    lastModified: typeof org.lastModified === "number" ? org.lastModified : now,
+    id: normalizeString(member.id) || generateUuid(),
+    userId: normalizeString(member.userId),
+    email: normalizeString(member.email).trim().toLowerCase(),
+    name: normalizeString(member.name),
+    title: normalizeString(member.title),
+    role: normalizeRole(member.role),
+    status: normalizeStatus(member.status),
+    joinedAt: typeof member.joinedAt === "number" ? member.joinedAt : now,
   };
 };
 
-// Get all organizations
+const isOwnerMemberIdentity = (
+  organization: Pick<Organization, "ownerId" | "ownerEmail">,
+  member: Pick<OrganizationMember, "userId" | "email">,
+): boolean => {
+  const ownerId = normalizeString(organization.ownerId);
+  const ownerEmail = normalizeString(organization.ownerEmail).trim().toLowerCase();
+  const memberUserId = normalizeString(member.userId);
+  const memberEmail = normalizeString(member.email).trim().toLowerCase();
+
+  if (ownerId && memberUserId) {
+    return ownerId === memberUserId;
+  }
+
+  if (ownerEmail && memberEmail) {
+    return ownerEmail === memberEmail;
+  }
+
+  return false;
+};
+
+const getFallbackRoleForFormerOwner = (
+  plan: OrganizationPlan,
+): OrganizationMemberRole => {
+  return isRoleAllowedForPlan(plan, "admin") ? "admin" : "member";
+};
+
+const enforceSingleOwnerMember = (
+  organization: Organization,
+): Organization => {
+  const fallbackRole = getFallbackRoleForFormerOwner(organization.plan);
+  let hasOwnerMember = false;
+
+  const nextMembers = organization.members.map((member) => {
+    if (isOwnerMemberIdentity(organization, member)) {
+      hasOwnerMember = true;
+
+      return normalizeMember({
+        ...member,
+        userId: organization.ownerId || member.userId,
+        email: organization.ownerEmail || member.email,
+        role: "owner",
+        status: "active",
+      });
+    }
+
+    if (member.role === "owner") {
+      return normalizeMember({
+        ...member,
+        role: fallbackRole,
+      });
+    }
+
+    return member;
+  });
+
+  if (!hasOwnerMember && (organization.ownerId || organization.ownerEmail)) {
+    nextMembers.unshift(
+      normalizeMember({
+        id: generateUuid(),
+        userId: organization.ownerId,
+        email: organization.ownerEmail,
+        role: "owner",
+        status: "active",
+        joinedAt: Date.now(),
+      }),
+    );
+  }
+
+  return {
+    ...organization,
+    members: nextMembers,
+  };
+};
+
+const normalizeOrganization = (org: Partial<Organization>): Organization => {
+  const now = Date.now();
+  const members = Array.isArray(org.members)
+    ? org.members.map(normalizeMember)
+    : [];
+
+  const organization = {
+    id: normalizeString(org.id) || generateUuid(),
+    name: normalizeString(org.name) || DEFAULT_ORGANIZATION_NAME,
+    description: normalizeString(org.description),
+    plan: normalizePlan(org.plan),
+    ownerId: normalizeString(org.ownerId),
+    ownerEmail: normalizeString(org.ownerEmail).trim().toLowerCase(),
+    members,
+    createdAt: typeof org.createdAt === "number" ? org.createdAt : now,
+    lastModified: typeof org.lastModified === "number" ? org.lastModified : now,
+  };
+
+  return enforceSingleOwnerMember(organization);
+};
+
+const saveOrganizations = (organizations: Organization[]): void => {
+  localStorage.setItem(ORGANIZATIONS_KEY, JSON.stringify(organizations));
+};
+
+const upsertOrganization = (organization: Organization): Organization[] => {
+  const organizations = getOrganizations();
+  const nextOrganizations = organizations.some((item) => item.id === organization.id)
+    ? organizations.map((item) =>
+        item.id === organization.id ? organization : item,
+      )
+    : [...organizations, organization];
+
+  saveOrganizations(nextOrganizations);
+  return nextOrganizations;
+};
+
+const findMemberIndex = (
+  organization: Organization,
+  member: Pick<OrganizationMember, "email" | "userId">,
+): number => {
+  return organization.members.findIndex((item) => {
+    if (member.userId && item.userId) {
+      return item.userId === member.userId;
+    }
+
+    return (
+      item.email.trim().toLowerCase() === member.email.trim().toLowerCase()
+    );
+  });
+};
+
+const validateMemberSeatAvailability = (
+  organization: Organization,
+): Error | null => {
+  const limits = getOrganizationPlanLimits(organization.plan);
+  if (
+    hasFiniteLimit(limits.maxMembers) &&
+    organization.members.length >= limits.maxMembers
+  ) {
+    return new Error("Plan member limit reached");
+  }
+
+  return null;
+};
+
+const validateMemberRoleForPlan = (
+  organization: Organization,
+  role: OrganizationMemberRole,
+  memberId?: string,
+): Error | null => {
+  if (!isRoleAllowedForPlan(organization.plan, role)) {
+    return new Error("Role not allowed for current plan");
+  }
+
+  if (role !== "admin") {
+    return null;
+  }
+
+  const limits = getOrganizationPlanLimits(organization.plan);
+  if (!hasFiniteLimit(limits.maxAdmins)) {
+    return null;
+  }
+
+  const currentMember = memberId
+    ? organization.members.find((member) => member.id === memberId)
+    : undefined;
+  const alreadyCountsAsAdmin = currentMember
+    ? isManagerRole(currentMember.role)
+    : false;
+  const usage = getOrganizationPlanUsage(organization);
+
+  if (!alreadyCountsAsAdmin && usage.adminMembers >= limits.maxAdmins) {
+    return new Error("Plan admin limit reached");
+  }
+
+  return null;
+};
+
+/**
+ * 获取指定 Plan 的成员与角色配额。
+ * @param plan 组织当前或目标 Plan。
+ * @returns Plan 对应的配额与允许角色集合。
+ */
+export const getOrganizationPlanLimits = (
+  plan: OrganizationPlan,
+): OrganizationPlanLimits => {
+  return ORGANIZATION_PLAN_LIMITS[plan];
+};
+
+/**
+ * 获取指定 Plan 可分配的成员角色列表。
+ * @param plan 组织当前或目标 Plan。
+ * @returns 当前 Plan 允许的角色数组。
+ */
+export const getAvailableRolesForPlan = (
+  plan: OrganizationPlan,
+): OrganizationMemberRole[] => {
+  return [...ORGANIZATION_PLAN_LIMITS[plan].allowedRoles];
+};
+
+/**
+ * 统计组织当前 Plan 使用量，包括成员席位与管理员配额占用。
+ * @param organization 当前组织对象。
+ * @returns 可用于界面展示和配额判断的使用情况。
+ */
+export const getOrganizationPlanUsage = (
+  organization: Organization,
+): OrganizationPlanUsage => {
+  const limits = getOrganizationPlanLimits(organization.plan);
+  const activeMembers = organization.members.filter(
+    (member) => member.status === "active",
+  ).length;
+  const totalMembers = organization.members.length;
+  const adminMembers = organization.members.filter((member) =>
+    isManagerRole(member.role),
+  ).length;
+
+  return {
+    totalMembers,
+    activeMembers,
+    invitedMembers: totalMembers - activeMembers,
+    adminMembers,
+    remainingMemberSlots: hasFiniteLimit(limits.maxMembers)
+      ? Math.max(limits.maxMembers - totalMembers, 0)
+      : null,
+    remainingAdminSlots: hasFiniteLimit(limits.maxAdmins)
+      ? Math.max(limits.maxAdmins - adminMembers, 0)
+      : null,
+  };
+};
+
+/**
+ * 校验组织是否可以切换到目标 Plan，常用于降级前检查当前使用量。
+ * @param organization 当前组织对象。
+ * @param nextPlan 目标 Plan。
+ * @returns 不可切换时返回错误文案键；可切换时返回 null。
+ */
+export const getOrganizationPlanChangeError = (
+  organization: Organization,
+  nextPlan: OrganizationPlan,
+): string | null => {
+  if (organization.plan === nextPlan) {
+    return null;
+  }
+
+  const nextLimits = getOrganizationPlanLimits(nextPlan);
+  const usage = getOrganizationPlanUsage(organization);
+
+  if (
+    organization.members.some(
+      (member) => !isRoleAllowedForPlan(nextPlan, member.role),
+    )
+  ) {
+    return "Plan downgrade blocked by assigned roles";
+  }
+
+  if (
+    hasFiniteLimit(nextLimits.maxMembers) &&
+    usage.totalMembers > nextLimits.maxMembers
+  ) {
+    return "Plan downgrade blocked by member count";
+  }
+
+  if (
+    hasFiniteLimit(nextLimits.maxAdmins) &&
+    usage.adminMembers > nextLimits.maxAdmins
+  ) {
+    return "Plan downgrade blocked by admin count";
+  }
+
+  return null;
+};
+
+/**
+ * 读取全部组织数据。
+ * @returns 规范化后的组织列表；读取失败时返回空数组。
+ */
 export const getOrganizations = (): Organization[] => {
   try {
-    const data = localStorage.getItem(ORGANIZATIONS_KEY);
-    if (!data) return [];
+    const raw = localStorage.getItem(ORGANIZATIONS_KEY);
+    if (!raw) {
+      return [];
+    }
 
-    const parsed = JSON.parse(data) as Array<Partial<Organization>>;
+    const parsed = JSON.parse(raw) as Array<Partial<Organization>>;
     return Array.isArray(parsed) ? parsed.map(normalizeOrganization) : [];
-  } catch (e) {
-    console.error("Failed to load organizations", e);
+  } catch (error) {
+    console.error("getOrganizations failed:", error);
     return [];
   }
 };
 
-// Get organization by ID
+/**
+ * 根据组织 ID 获取单个组织。
+ * @param orgId 组织唯一标识。
+ * @returns 命中的组织对象；未找到时返回 undefined。
+ */
 export const getOrganization = (orgId: string): Organization | undefined => {
-  const orgs = getOrganizations();
-  return orgs.find((o) => o.id === orgId);
+  return getOrganizations().find((organization) => organization.id === orgId);
 };
 
-// Get organizations by owner
+/**
+ * 根据所有者 ID 获取其创建的组织列表。
+ * @param ownerId 所有者用户 ID。
+ * @returns 该用户拥有的组织列表。
+ */
 export const getOrganizationsByOwner = (ownerId: string): Organization[] => {
-  const orgs = getOrganizations();
-  return orgs.filter((o) => o.ownerId === ownerId);
+  return getOrganizations().filter((organization) => organization.ownerId === ownerId);
 };
 
-// Create a new organization
-export const createOrganization = (input: CreateOrganizationInput): Organization => {
-  const orgs = getOrganizations();
+/**
+ * 创建一个新组织，并自动写入 owner 成员。
+ * @param input 组织基础信息。
+ * @returns 新创建并已持久化的组织对象。
+ */
+export const createOrganization = (
+  input: CreateOrganizationInput,
+): Organization => {
   const now = Date.now();
 
-  const newOrg: Organization = {
+  const organization = normalizeOrganization({
     id: generateUuid(),
-    name: input.name,
+    name: input.name.trim() || DEFAULT_ORGANIZATION_NAME,
+    description: input.description?.trim() || "",
+    plan: input.plan || "free",
     ownerId: input.ownerId,
+    ownerEmail: input.ownerEmail.trim().toLowerCase(),
     members: [
       {
-        id: input.ownerId,
-        email: "",
+        id: generateUuid(),
+        userId: input.ownerId,
+        email: input.ownerEmail,
+        name: input.ownerName || "",
+        title: input.ownerTitle || "",
         role: "owner",
+        status: "active",
         joinedAt: now,
       },
     ],
     createdAt: now,
     lastModified: now,
-  };
+  });
 
-  orgs.push(newOrg);
-  localStorage.setItem(ORGANIZATIONS_KEY, JSON.stringify(orgs));
-
-  return newOrg;
+  upsertOrganization(organization);
+  return organization;
 };
 
-// Update organization
+/**
+ * 更新组织基础信息。
+ * @param orgId 组织唯一标识。
+ * @param data 可编辑的组织字段。
+ * @returns 更新后的组织；未找到时返回 null。
+ */
 export const updateOrganization = (
   orgId: string,
-  data: Partial<Pick<Organization, "name">>
+  data: UpdateOrganizationInput,
 ): Organization | null => {
-  const orgs = getOrganizations();
-  const index = orgs.findIndex((o) => o.id === orgId);
+  const organization = getOrganization(orgId);
+  if (!organization) {
+    return null;
+  }
 
-  if (index < 0) return null;
-
-  const updatedOrg: Organization = {
-    ...orgs[index],
+  const nextOrganization = normalizeOrganization({
+    ...organization,
     ...data,
+    name: data.name?.trim() || organization.name,
+    description: data.description?.trim() ?? organization.description,
     lastModified: Date.now(),
-  };
+  });
 
-  orgs[index] = updatedOrg;
-  localStorage.setItem(ORGANIZATIONS_KEY, JSON.stringify(orgs));
-
-  return updatedOrg;
+  upsertOrganization(nextOrganization);
+  return nextOrganization;
 };
 
-// Delete organization
-export const deleteOrganization = (orgId: string): boolean => {
-  const orgs = getOrganizations();
-  const newOrgs = orgs.filter((o) => o.id !== orgId);
+/**
+ * 在满足当前使用量约束的前提下切换组织 Plan。
+ * @param orgId 组织唯一标识。
+ * @param nextPlan 目标 Plan。
+ * @returns 更新后的组织或错误信息。
+ */
+export const changeOrganizationPlan = (
+  orgId: string,
+  nextPlan: OrganizationPlan,
+): OrganizationMutationResult => {
+  try {
+    const organization = getOrganization(orgId);
+    if (!organization) {
+      return {
+        organization: null,
+        error: new Error("Organization not found"),
+      };
+    }
 
-  if (newOrgs.length === orgs.length) return false;
+    const planError = getOrganizationPlanChangeError(organization, nextPlan);
+    if (planError) {
+      return {
+        organization: null,
+        error: new Error(planError),
+      };
+    }
 
-  localStorage.setItem(ORGANIZATIONS_KEY, JSON.stringify(newOrgs));
+    const updatedOrganization = updateOrganization(orgId, { plan: nextPlan });
+    if (!updatedOrganization) {
+      return {
+        organization: null,
+        error: new Error("Organization update failed"),
+      };
+    }
+
+    return {
+      organization: updatedOrganization,
+      error: null,
+    };
+  } catch (error) {
+    console.error("changeOrganizationPlan failed:", error);
+    return {
+      organization: null,
+      error: error as Error,
+    };
+  }
+};
+
+/**
+ * 向组织中新增成员或邀请记录。
+ * @param orgId 组织唯一标识。
+ * @param input 成员信息。
+ * @returns 更新后的组织或错误。
+ */
+export const addOrganizationMember = (
+  orgId: string,
+  input: OrganizationMemberInput,
+): OrganizationMutationResult => {
+  try {
+    const organization = getOrganization(orgId);
+    if (!organization) {
+      return {
+        organization: null,
+        error: new Error("Organization not found"),
+      };
+    }
+
+    const email = input.email.trim().toLowerCase();
+    if (!email) {
+      return {
+        organization: null,
+        error: new Error("Member email is required"),
+      };
+    }
+
+    if (
+      organization.members.some(
+        (member) => member.email.trim().toLowerCase() === email,
+      )
+    ) {
+      return {
+        organization: null,
+        error: new Error("Member already exists"),
+      };
+    }
+
+    const seatError = validateMemberSeatAvailability(organization);
+    if (seatError) {
+      return {
+        organization: null,
+        error: seatError,
+      };
+    }
+
+    const nextRole = input.role || "member";
+    const roleError = validateMemberRoleForPlan(organization, nextRole);
+    if (roleError) {
+      return {
+        organization: null,
+        error: roleError,
+      };
+    }
+
+    const nextOrganization = normalizeOrganization({
+      ...organization,
+      members: [
+        ...organization.members,
+        {
+          id: generateUuid(),
+          userId: input.userId || "",
+          email,
+          name: input.name || "",
+          title: input.title || "",
+          role: nextRole,
+          status: input.status || (input.userId ? "active" : "invited"),
+          joinedAt: Date.now(),
+        },
+      ],
+      lastModified: Date.now(),
+    });
+
+    upsertOrganization(nextOrganization);
+    return {
+      organization: nextOrganization,
+      error: null,
+    };
+  } catch (error) {
+    console.error("addOrganizationMember failed:", error);
+    return {
+      organization: null,
+      error: error as Error,
+    };
+  }
+};
+
+/**
+ * 更新组织成员信息与角色。
+ * @param orgId 组织唯一标识。
+ * @param memberId 成员唯一标识。
+ * @param data 允许更新的成员字段。
+ * @returns 更新后的组织；未找到时返回 null。
+ */
+export const updateOrganizationMember = (
+  orgId: string,
+  memberId: string,
+  data: Partial<
+    Pick<OrganizationMember, "email" | "name" | "title" | "role" | "status">
+  >,
+): OrganizationMutationResult => {
+  try {
+    const organization = getOrganization(orgId);
+    if (!organization) {
+      return {
+        organization: null,
+        error: new Error("Organization not found"),
+      };
+    }
+
+    const currentMember = organization.members.find((member) => member.id === memberId);
+    if (!currentMember) {
+      return {
+        organization: null,
+        error: new Error("Member not found"),
+      };
+    }
+
+    const isCurrentOwner = isOwnerMemberIdentity(organization, currentMember);
+    const fallbackRole = getFallbackRoleForFormerOwner(organization.plan);
+    const nextRole = isCurrentOwner
+      ? "owner"
+      : data.role || (currentMember.role === "owner" ? fallbackRole : currentMember.role);
+    const roleError = validateMemberRoleForPlan(organization, nextRole, memberId);
+    if (roleError) {
+      return {
+        organization: null,
+        error: roleError,
+      };
+    }
+
+    const nextMembers = organization.members.map((member) => {
+      if (member.id !== memberId) {
+        return member;
+      }
+
+      return normalizeMember({
+        ...member,
+        ...data,
+        email: data.email?.trim().toLowerCase() || member.email,
+        role: nextRole,
+        status: data.status || member.status,
+      });
+    });
+
+    const nextOrganization = normalizeOrganization({
+      ...organization,
+      members: nextMembers,
+      lastModified: Date.now(),
+    });
+
+    upsertOrganization(nextOrganization);
+    return {
+      organization: nextOrganization,
+      error: null,
+    };
+  } catch (error) {
+    console.error("updateOrganizationMember failed:", error);
+    return {
+      organization: null,
+      error: error as Error,
+    };
+  }
+};
+
+/**
+ * 移除组织中的指定成员；owner 不允许被删除。
+ * @param orgId 组织唯一标识。
+ * @param memberId 成员唯一标识。
+ * @returns 删除成功返回 true，否则返回 false。
+ */
+export const removeOrganizationMember = (
+  orgId: string,
+  memberId: string,
+): boolean => {
+  const organization = getOrganization(orgId);
+  if (!organization) {
+    return false;
+  }
+
+  const targetMember = organization.members.find((member) => member.id === memberId);
+  if (!targetMember || isOwnerMemberIdentity(organization, targetMember)) {
+    return false;
+  }
+
+  const nextOrganization = normalizeOrganization({
+    ...organization,
+    members: organization.members.filter((member) => member.id !== memberId),
+    lastModified: Date.now(),
+  });
+
+  upsertOrganization(nextOrganization);
   return true;
 };
 
-// Get or create default organization for user
-export const getOrCreateDefaultOrganization = (userId: string): Organization => {
-  const existingOrgs = getOrganizationsByOwner(userId);
-  if (existingOrgs.length > 0) {
-    return existingOrgs[0];
+/**
+ * 将当前登录用户信息同步到组织 owner 成员条目中，保证邮箱、姓名和职位一致。
+ * @param orgId 组织唯一标识。
+ * @param owner 当前 owner 的关键信息。
+ * @returns 更新后的组织；未找到时返回 null。
+ */
+export const syncOrganizationOwnerMember = (
+  orgId: string,
+  owner: {
+    userId: string;
+    email: string;
+    name?: string;
+    title?: string;
+  },
+): Organization | null => {
+  const organization = getOrganization(orgId);
+  if (!organization) {
+    return null;
   }
+
+  const ownerEmail = owner.email.trim().toLowerCase();
+  const ownerIndex = findMemberIndex(organization, {
+    userId: owner.userId,
+    email: ownerEmail,
+  });
+  const nextMembers = [...organization.members];
+
+  if (ownerIndex >= 0) {
+    nextMembers[ownerIndex] = normalizeMember({
+      ...nextMembers[ownerIndex],
+      userId: owner.userId,
+      email: ownerEmail,
+      name: owner.name ?? nextMembers[ownerIndex].name,
+      title: owner.title ?? nextMembers[ownerIndex].title,
+      role: "owner",
+      status: "active",
+    });
+  } else {
+    nextMembers.unshift(
+      normalizeMember({
+        id: generateUuid(),
+        userId: owner.userId,
+        email: ownerEmail,
+        name: owner.name || "",
+        title: owner.title || "",
+        role: "owner",
+        status: "active",
+        joinedAt: Date.now(),
+      }),
+    );
+  }
+
+  const nextOrganization = normalizeOrganization({
+    ...organization,
+    ownerId: owner.userId,
+    ownerEmail,
+    members: nextMembers,
+    lastModified: Date.now(),
+  });
+
+  upsertOrganization(nextOrganization);
+  return nextOrganization;
+};
+
+/**
+ * 获取或创建用户的默认组织，并在已有组织上同步 owner 资料。
+ * @param userId 当前用户 ID。
+ * @param options owner 的补充信息以及默认组织名。
+ * @returns 当前用户对应的默认组织。
+ */
+export const getOrCreateDefaultOrganization = (
+  userId: string,
+  options: DefaultOrganizationOptions = {},
+): Organization => {
+  const existingOrganization = getOrganizationsByOwner(userId)[0];
+  const preferredName = options.preferredName?.trim();
+
+  if (existingOrganization) {
+    let nextOrganization = existingOrganization;
+
+    if (
+      preferredName &&
+      (nextOrganization.name === DEFAULT_ORGANIZATION_NAME ||
+        !nextOrganization.name.trim())
+    ) {
+      const updated = updateOrganization(nextOrganization.id, {
+        name: preferredName,
+      });
+      if (updated) {
+        nextOrganization = updated;
+      }
+    }
+
+    const syncedOrganization = syncOrganizationOwnerMember(nextOrganization.id, {
+      userId,
+      email: options.ownerEmail || nextOrganization.ownerEmail,
+      name: options.ownerName,
+      title: options.ownerTitle,
+    });
+
+    return syncedOrganization || nextOrganization;
+  }
+
   return createOrganization({
-    name: "我的团队",
+    name: preferredName || DEFAULT_ORGANIZATION_NAME,
     ownerId: userId,
+    ownerEmail: options.ownerEmail || "",
+    ownerName: options.ownerName,
+    ownerTitle: options.ownerTitle,
+    plan: "free",
   });
 };
 
-// Associate patents with user and organization
+/**
+ * 将历史草稿绑定到当前用户和组织，避免旧数据在升级后丢失归属。
+ * @param userId 当前用户 ID。
+ * @param organizationId 当前组织 ID。
+ * @returns 被补齐归属的专利数量。
+ */
 export const associatePatentsWithUser = (
   userId: string,
-  organizationId: string
+  organizationId: string,
 ): number => {
   const patents = getPatents();
   let count = 0;
 
-  const updatedPatents = patents.map((patent) => {
-    // Only associate patents that don't have a userId (legacy patents)
+  patents.forEach((patent) => {
     if (!patent.userId) {
-      count++;
-      return {
+      count += 1;
+      savePatentToStorage({
         ...patent,
         userId,
         organizationId,
-      };
+      });
     }
-    return patent;
-  });
-
-  // Save each updated patent
-  updatedPatents.forEach((patent) => {
-    savePatentToStorage(patent);
   });
 
   return count;

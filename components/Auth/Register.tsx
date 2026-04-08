@@ -1,16 +1,21 @@
 import React, { useState } from 'react';
 import { signUp, translateAuthErrorMessage } from '../../services/supabaseService';
+import type { AuthNotice } from '../../types';
 
 interface RegisterProps {
   onSwitchToLogin: () => void;
   onRegisterSuccess: () => void;
   isConfigured: boolean;
+  notice?: AuthNotice | null;
+  onClearNotice?: () => void;
 }
 
 const Register: React.FC<RegisterProps> = ({
   onSwitchToLogin,
   onRegisterSuccess,
-  isConfigured
+  isConfigured,
+  notice,
+  onClearNotice
 }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -23,6 +28,7 @@ const Register: React.FC<RegisterProps> = ({
     e.preventDefault();
     setError(null);
     setSuccess(false);
+    onClearNotice?.();
 
     if (!email || !password || !confirmPassword) {
       setError('请填写所有字段');
@@ -75,7 +81,10 @@ const Register: React.FC<RegisterProps> = ({
                 : `已在当前浏览器中创建本地测试账户 ${email}，可以直接返回登录页面联调。`}
             </p>
             <button
-              onClick={onSwitchToLogin}
+              onClick={() => {
+                onRegisterSuccess();
+                onSwitchToLogin();
+              }}
               className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-all"
             >
               返回登录
@@ -95,6 +104,18 @@ const Register: React.FC<RegisterProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {notice && (
+            <div className={`rounded-lg p-3 text-sm border ${
+              notice.tone === 'error'
+                ? 'bg-red-500/20 border-red-500/50 text-red-200'
+                : notice.tone === 'success'
+                  ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-200'
+                  : 'bg-sky-500/20 border-sky-500/50 text-sky-200'
+            }`}>
+              {notice.message}
+            </div>
+          )}
+
           {error && (
             <div className="bg-red-500/20 border border-red-500/50 rounded-lg p-3 text-red-300 text-sm">
               {error}
@@ -174,7 +195,10 @@ const Register: React.FC<RegisterProps> = ({
         <div className="mt-6 flex items-center justify-center gap-2">
           <span className="text-sm text-slate-400">已有账户？</span>
           <button
-            onClick={onSwitchToLogin}
+            onClick={() => {
+              onClearNotice?.();
+              onSwitchToLogin();
+            }}
             className="text-sm text-blue-400 hover:text-blue-300 transition-colors"
           >
             立即登录
