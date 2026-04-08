@@ -4,6 +4,7 @@ import {
   type SupabaseClient,
   type User,
 } from "@supabase/supabase-js";
+import { generateUuid } from "./idService";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
@@ -268,7 +269,7 @@ const createMockUserRecord = (
   const now = new Date().toISOString();
 
   return {
-    id: crypto.randomUUID(),
+    id: generateUuid(),
     email,
     password,
     createdAt: now,

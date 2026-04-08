@@ -7,6 +7,7 @@ import {
   PatentType,
   TechnicalField,
 } from "../types";
+import { generateUuid } from "./idService";
 
 const STORAGE_KEY = "patent_pro_data";
 const TECHNICAL_FIELDS: readonly TechnicalField[] = [
@@ -129,7 +130,7 @@ const normalizePatentData = (patent: Partial<PatentData>): PatentData => {
   const now = Date.now();
 
   return {
-    id: patent.id || crypto.randomUUID(),
+    id: patent.id || generateUuid(),
     title: patent.title || "未命名专利",
     status:
       patent.status === "ready_to_submit" ||
@@ -253,7 +254,7 @@ export const deletePatentFromStorage = (id: string): void => {
  */
 export const createNewPatentData = (): PatentData => {
   return {
-    id: crypto.randomUUID(),
+    id: generateUuid(),
     title: "未命名专利",
     status: "disclosure_collecting",
     createdAt: Date.now(),

@@ -139,7 +139,7 @@ const PatentDraft: React.FC<PatentDraftProps> = ({
 
   return (
     <div className="w-full h-full overflow-y-auto bg-slate-50 p-6 md:p-8">
-      <div className="max-w-5xl mx-auto mb-6">
+      <div className="max-w-6xl mx-auto mb-6">
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
             <div>

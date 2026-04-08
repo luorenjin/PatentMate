@@ -90,7 +90,7 @@ const Register: React.FC<RegisterProps> = ({
     <div className="min-h-screen bg-linear-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
       <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 max-w-md w-full border border-white/20">
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-white mb-2">专利助手</h1>
+          <h1 className="text-2xl font-bold text-white mb-2">智专易</h1>
           <p className="text-slate-400">创建新账户</p>
         </div>
 

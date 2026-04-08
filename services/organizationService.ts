@@ -1,3 +1,4 @@
+import { generateUuid } from "./idService";
 import { PatentData, getPatents, savePatentToStorage } from "./storageService";
 
 const ORGANIZATIONS_KEY = "patent_pro_organizations";
@@ -27,7 +28,7 @@ const normalizeOrganization = (org: Partial<Organization>): Organization => {
   const now = Date.now();
   const normalizedMembers: OrganizationMember[] = Array.isArray(org.members)
     ? org.members.map((m) => ({
-        id: m.id || crypto.randomUUID(),
+        id: m.id || generateUuid(),
         email: m.email || "",
         role: m.role || "member",
         joinedAt: typeof m.joinedAt === "number" ? m.joinedAt : now,
@@ -35,7 +36,7 @@ const normalizeOrganization = (org: Partial<Organization>): Organization => {
     : [];
 
   return {
-    id: org.id || crypto.randomUUID(),
+    id: org.id || generateUuid(),
     name: org.name || "未命名组织",
     ownerId: org.ownerId || "",
     members: normalizedMembers,
@@ -76,7 +77,7 @@ export const createOrganization = (input: CreateOrganizationInput): Organization
   const now = Date.now();
 
   const newOrg: Organization = {
-    id: crypto.randomUUID(),
+    id: generateUuid(),
     name: input.name,
     ownerId: input.ownerId,
     members: [

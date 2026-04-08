@@ -35,7 +35,7 @@ const TypeSelection: React.FC<TypeSelectionProps> = ({ selectedType, onSelect, o
   ];
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-6xl mx-auto">
       {onBack && (
         <div className="mb-6">
           <button
