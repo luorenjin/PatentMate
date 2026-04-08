@@ -1,5 +1,6 @@
 import { type User } from '@supabase/supabase-js';
 import React, { Suspense, lazy, useEffect, useState } from 'react';
+import ErrorBoundary from './components/ErrorBoundary';
 import Sidebar from './components/Sidebar';
 import { AppView, type AuthNotice, type AuthView, type PatentData } from './types';
 import { savePatentToStorage, createNewPatentData } from './services/storageService';
@@ -447,58 +448,60 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="flex h-screen w-full bg-slate-50 font-sans">
-      <Sidebar
-        currentView={currentView}
-        setView={handleSidebarNavigation}
-        patentData={patentData}
-        onSignOut={handleSignOut}
-      />
+    <ErrorBoundary>
+      <div className="flex h-screen w-full bg-slate-50 font-sans">
+        <Sidebar
+          currentView={currentView}
+          setView={handleSidebarNavigation}
+          patentData={patentData}
+          onSignOut={handleSignOut}
+        />
 
-      <main className="flex-1 relative overflow-hidden flex flex-col">
-        <div className="flex-1 overflow-y-auto p-8 scroll-smooth space-y-6">
-          {authNotice && (
-            <div className={`rounded-2xl border px-5 py-4 text-sm ${
-              authNotice.tone === 'error'
-                ? 'border-red-200 bg-red-50 text-red-700'
-                : authNotice.tone === 'success'
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                  : 'border-sky-200 bg-sky-50 text-sky-700'
-            }`}>
-              <div className="flex items-start justify-between gap-4">
-                <span>{authNotice.message}</span>
-                <button
-                  onClick={() => setAuthNotice(null)}
-                  className="text-xs font-medium opacity-70 hover:opacity-100"
-                >
-                  关闭
-                </button>
+        <main className="flex-1 relative overflow-hidden flex flex-col">
+          <div className="flex-1 overflow-y-auto p-8 scroll-smooth space-y-6">
+            {authNotice && (
+              <div className={`rounded-2xl border px-5 py-4 text-sm ${
+                authNotice.tone === 'error'
+                  ? 'border-red-200 bg-red-50 text-red-700'
+                  : authNotice.tone === 'success'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'border-sky-200 bg-sky-50 text-sky-700'
+              }`}>
+                <div className="flex items-start justify-between gap-4">
+                  <span>{authNotice.message}</span>
+                  <button
+                    onClick={() => setAuthNotice(null)}
+                    className="text-xs font-medium opacity-70 hover:opacity-100"
+                  >
+                    关闭
+                  </button>
+                </div>
               </div>
+            )}
+
+            <Suspense fallback={fallback}>
+              {renderView()}
+            </Suspense>
+          </div>
+
+          {notification && (
+            <div className="absolute top-6 right-6 bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg z-50 animate-fade-in-down flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+              {notification}
             </div>
           )}
 
-          <Suspense fallback={fallback}>
-            {renderView()}
+          <Suspense fallback={null}>
+            <ChatAssistant
+              isOpen={isChatOpen}
+              onToggle={() => setIsChatOpen(!isChatOpen)}
+              currentView={currentView}
+              patentData={patentData}
+            />
           </Suspense>
-        </div>
-
-        {notification && (
-          <div className="absolute top-6 right-6 bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg z-50 animate-fade-in-down flex items-center gap-2">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-            {notification}
-          </div>
-        )}
-
-        <Suspense fallback={null}>
-          <ChatAssistant
-            isOpen={isChatOpen}
-            onToggle={() => setIsChatOpen(!isChatOpen)}
-            currentView={currentView}
-            patentData={patentData}
-          />
-        </Suspense>
-      </main>
-    </div>
+        </main>
+      </div>
+    </ErrorBoundary>
   );
 };
 

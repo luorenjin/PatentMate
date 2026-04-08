@@ -8,6 +8,7 @@ import type {
   ReviewResult,
   TechnicalDisclosureSummary,
 } from "../types";
+import { captureError, monitorAICall, addBreadcrumb } from "./sentryService";
 
 const PROVIDER_GEMINI = "gemini";
 const PROVIDER_QWEN = "qwen";
@@ -219,68 +220,78 @@ export const generateText = async (
   text: string;
   groundingLinks: Array<{ title: string; uri: string }>;
 }> => {
-  try {
-    const model = getTextModel(level);
+  return monitorAICall(`generateText_${level}`, async () => {
+    try {
+      addBreadcrumb('ai.request', `generateText (${level}, ${prompt.length} chars)`, 'info');
 
-    if (useGemini()) {
-      if (!geminiClient) {
-        console.error("Gemini API key is missing.");
-        return { text: "", groundingLinks: [] };
+      const model = getTextModel(level);
+
+      if (useGemini()) {
+        if (!geminiClient) {
+          const error = new Error("Gemini API key is missing");
+          captureError(error, { operation: 'generateText', provider: 'gemini' });
+          console.error("Gemini API key is missing.");
+          return { text: "", groundingLinks: [] };
+        }
+
+        const response = await geminiClient.models.generateContent({
+          model,
+          contents: prompt,
+          config: {
+            ...(options?.useGoogleSearch
+              ? { tools: [{ googleSearch: {} }] }
+              : {}),
+            ...(options?.jsonMode
+              ? { responseMimeType: "application/json" }
+              : {}),
+            ...(options?.systemInstruction
+              ? { systemInstruction: options.systemInstruction }
+              : {}),
+          },
+        });
+
+        const groundingChunks =
+          response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+        const groundingLinks = Array.isArray(groundingChunks)
+          ? groundingChunks
+              .filter(
+                (chunk) =>
+                  typeof chunk?.web?.title === "string" &&
+                  typeof chunk?.web?.uri === "string",
+              )
+              .map((chunk) => ({
+                title: chunk.web!.title as string,
+                uri: chunk.web!.uri as string,
+              }))
+          : [];
+
+        addBreadcrumb('ai.response', `generateText completed (${response.text?.length || 0} chars)`, 'info');
+        return {
+          text: response.text || "",
+          groundingLinks,
+        };
       }
 
-      const response = await geminiClient.models.generateContent({
+      const qwenMessages: QwenMessage[] = [];
+      if (options?.systemInstruction) {
+        qwenMessages.push({ role: "system", content: options.systemInstruction });
+      }
+      qwenMessages.push({ role: "user", content: prompt });
+
+      const text = await requestQwenChat(
+        qwenMessages,
         model,
-        contents: prompt,
-        config: {
-          ...(options?.useGoogleSearch
-            ? { tools: [{ googleSearch: {} }] }
-            : {}),
-          ...(options?.jsonMode
-            ? { responseMimeType: "application/json" }
-            : {}),
-          ...(options?.systemInstruction
-            ? { systemInstruction: options.systemInstruction }
-            : {}),
-        },
-      });
+        !!options?.jsonMode,
+      );
 
-      const groundingChunks =
-        response.candidates?.[0]?.groundingMetadata?.groundingChunks;
-      const groundingLinks = Array.isArray(groundingChunks)
-        ? groundingChunks
-            .filter(
-              (chunk) =>
-                typeof chunk?.web?.title === "string" &&
-                typeof chunk?.web?.uri === "string",
-            )
-            .map((chunk) => ({
-              title: chunk.web!.title as string,
-              uri: chunk.web!.uri as string,
-            }))
-        : [];
-
-      return {
-        text: response.text || "",
-        groundingLinks,
-      };
+      addBreadcrumb('ai.response', `generateText completed (${text?.length || 0} chars)`, 'info');
+      return { text, groundingLinks: [] };
+    } catch (error) {
+      captureError(error as Error, { operation: 'generateText', level, provider: useGemini() ? 'gemini' : 'qwen' });
+      console.error("generateText failed:", error);
+      return { text: "", groundingLinks: [] };
     }
-
-    const qwenMessages: QwenMessage[] = [];
-    if (options?.systemInstruction) {
-      qwenMessages.push({ role: "system", content: options.systemInstruction });
-    }
-    qwenMessages.push({ role: "user", content: prompt });
-
-    const text = await requestQwenChat(
-      qwenMessages,
-      model,
-      !!options?.jsonMode,
-    );
-    return { text, groundingLinks: [] };
-  } catch (error) {
-    console.error("generateText failed:", error);
-    return { text: "", groundingLinks: [] };
-  }
+  });
 };
 
 const truncateForPrompt = (value: string, maxLength: number = 1200): string => {
