@@ -207,7 +207,7 @@ const requestQwenChat = async (
   }
 };
 
-const generateText = async (
+export const generateText = async (
   prompt: string,
   level: "fast" | "pro",
   options?: {
