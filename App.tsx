@@ -9,11 +9,13 @@ import {
   isSupabaseConfigured,
   onAuthStateChange,
   signOut as supabaseSignOut,
+  translateAuthErrorMessage,
 } from './services/supabaseService';
 import {
   associatePatentsWithUser,
   getOrCreateDefaultOrganization,
   syncOrganizationOwnerMember,
+  type Organization,
 } from './services/organizationService';
 import {
   ensureUserProfile,
@@ -30,8 +32,8 @@ const PatentDraft = lazy(() => import('./components/PatentDraft'));
 
 const Login = lazy(() => import('./components/Auth/Login'));
 const Register = lazy(() => import('./components/Auth/Register'));
-const PasswordReset = lazy(() => import('./components/Auth/PasswordReset'));
-const OrganizationSettings = lazy(() => import('./components/Settings/OrganizationSettings'));
+const PasswordReset = lazy(() => import('./components/Auth/PasswordReset.tsx'));
+const OrganizationSettings = lazy(() => import('./components/Settings/OrganizationSettings.tsx'));
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.DASHBOARD);
@@ -69,13 +71,13 @@ const App: React.FC = () => {
     }
 
     const profile = await ensureUserProfile(user);
-    const organization = getOrCreateDefaultOrganization(user.id, {
+    const organization = await getOrCreateDefaultOrganization(user.id, {
       ownerEmail: user.email ?? '',
       ownerName: profile.name,
       ownerTitle: profile.jobTitle,
       preferredName: profile.defaultOrganizationName,
     });
-    const syncedOrganization = syncOrganizationOwnerMember(organization.id, {
+    const syncedOrganization = await syncOrganizationOwnerMember(organization.id, {
       userId: user.id,
       email: user.email ?? organization.ownerEmail,
       name: profile.name,
@@ -88,7 +90,7 @@ const App: React.FC = () => {
     setCurrentOrgName(syncedOrganization.name);
     setCurrentUserProfile(profile);
 
-    associatePatentsWithUser(user.id, syncedOrganization.id);
+    await associatePatentsWithUser(user.id, syncedOrganization.id);
   };
 
   useEffect(() => {
@@ -190,8 +192,15 @@ const App: React.FC = () => {
 
   const handleSave = () => {
     if (patentData) {
-      savePatentToStorage(patentData);
-      showNotification('保存成功！已存入草稿箱');
+      void (async () => {
+        const { error } = await savePatentToStorage(patentData);
+        if (error) {
+          showNotification(`草稿已保存到本地：${translateAuthErrorMessage(error.message)}`);
+          return;
+        }
+
+        showNotification('保存成功！已同步到数据库');
+      })();
     }
   };
 
@@ -214,7 +223,7 @@ const App: React.FC = () => {
 
   const handleBackToDashboard = () => {
     if (patentData) {
-      savePatentToStorage(patentData);
+      void savePatentToStorage(patentData);
     }
     setPatentData(null);
     setCurrentView(AppView.DASHBOARD);
@@ -315,8 +324,8 @@ const App: React.FC = () => {
           organizationId={currentOrgId}
           userId={currentUserId}
           onBack={() => setCurrentView(AppView.DASHBOARD)}
-          onOrganizationUpdated={(organization) => setCurrentOrgName(organization.name)}
-          onProfileUpdated={(profile) => setCurrentUserProfile(profile)}
+          onOrganizationUpdated={(organization: Organization) => setCurrentOrgName(organization.name)}
+          onProfileUpdated={(profile: UserProfile) => setCurrentUserProfile(profile)}
         />
       );
     }

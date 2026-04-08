@@ -73,6 +73,19 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 
 > 若未配置 Supabase，应用将在本地模式下运行（跳过登录，数据保存到 localStorage）。
 
+#### 数据表初始化（项目与组织落库必需）
+
+如果你希望专利项目和组织信息真正写入 Supabase 数据库，而不是只保存在浏览器本地，请在 Supabase SQL Editor 中执行以下脚本：
+
+1. 打开 [docs/supabase-persistence.sql](docs/supabase-persistence.sql)
+2. 复制全文到 Supabase SQL Editor
+3. 执行后再重新登录应用
+
+该脚本会创建以下表，并开启基础 RLS 策略：
+
+- `organizations`：保存完整组织对象与元数据
+- `patent_projects`：保存完整专利项目 JSON 负载与检索字段
+
 #### 邮件回跳配置
 
 为避免注册激活或密码重置邮件回跳后出现无效 hash、错误路由或一次性链接失效，请在 Supabase 后台额外完成以下配置：
@@ -141,7 +154,7 @@ Dashboard（草稿工作台）
 | 认证 | Supabase Auth |
 | Markdown 渲染 | `marked` 17 + KaTeX 0.16 |
 | 文档导出 | `docx` + `jspdf` |
-| 数据持久化 | localStorage（via `storageService.ts`） |
+| 数据持久化 | localStorage 缓存 + Supabase 数据库（已配置并完成 SQL 初始化时） |
 
 ---
 

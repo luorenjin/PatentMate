@@ -7,6 +7,7 @@ import {
   getOrganizationPlanChangeError,
   getOrganizationPlanLimits,
   getOrganizationPlanUsage,
+  loadOrganization,
   removeOrganizationMember,
   syncOrganizationOwnerMember,
   type Organization,
@@ -95,27 +96,31 @@ const ROLE_OPTIONS: Array<{ value: OrganizationMemberRole; label: string }> = [
   { value: 'viewer', label: '查看者' },
 ];
 
-const FIELD_CLASS_NAME = 'w-full rounded-2xl border border-slate-300 px-4 py-3 text-slate-900 transition focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500/40';
-const DISABLED_FIELD_CLASS_NAME = 'w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-500';
+const FIELD_CLASS_NAME = 'w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-slate-900 transition focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500/40';
+const DISABLED_FIELD_CLASS_NAME = 'w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-slate-500';
 const PANEL_COPY: Record<
   SettingsSection,
-  { eyebrow: string; title: string }
+  { eyebrow: string; title: string; description: string }
 > = {
   profile: {
     eyebrow: '账户档案',
     title: '账户资料',
+    description: '维护个人档案与默认组织信息，保持账户资料统一。',
   },
   organization: {
     eyebrow: '组织管理',
     title: '组织信息',
+    description: '管理组织名称、简介与当前协作信息，避免团队资料分散。',
   },
   plans: {
     eyebrow: 'Plan 升级',
     title: 'Plan 升级',
+    description: '集中查看档位差异、席位限制与升级建议。',
   },
   members: {
     eyebrow: '成员权限',
     title: '成员权限',
+    description: '用更直接的方式处理邀请、角色分配与成员状态流转。',
   },
 };
 
@@ -251,28 +256,42 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
   const [success, setSuccess] = useState<string | null>(null);
 
   useEffect(() => {
-    const nextOrganization = getOrganization(organizationId) ?? null;
-    const nextProfile = getUserProfile(userId) ?? null;
+    let isMounted = true;
 
-    setOrganization(nextOrganization);
-    setProfile(nextProfile);
+    const initializeSettings = async () => {
+      const nextOrganization = (await loadOrganization(organizationId)) ?? getOrganization(organizationId) ?? null;
+      const nextProfile = getUserProfile(userId) ?? null;
 
-    if (nextOrganization) {
-      setOrganizationForm({
-        name: nextOrganization.name,
-        description: nextOrganization.description,
-      });
-    }
+      if (!isMounted) {
+        return;
+      }
 
-    if (nextProfile) {
-      setProfileForm({
-        name: nextProfile.name,
-        jobTitle: nextProfile.jobTitle,
-        phone: nextProfile.phone,
-        avatarUrl: nextProfile.avatarUrl,
-        defaultOrganizationName: nextProfile.defaultOrganizationName,
-      });
-    }
+      setOrganization(nextOrganization);
+      setProfile(nextProfile);
+
+      if (nextOrganization) {
+        setOrganizationForm({
+          name: nextOrganization.name,
+          description: nextOrganization.description,
+        });
+      }
+
+      if (nextProfile) {
+        setProfileForm({
+          name: nextProfile.name,
+          jobTitle: nextProfile.jobTitle,
+          phone: nextProfile.phone,
+          avatarUrl: nextProfile.avatarUrl,
+          defaultOrganizationName: nextProfile.defaultOrganizationName,
+        });
+      }
+    };
+
+    void initializeSettings();
+
+    return () => {
+      isMounted = false;
+    };
   }, [organizationId, userId]);
 
   useEffect(() => {
@@ -320,7 +339,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
       setProfile(updatedProfile);
       onProfileUpdated?.(updatedProfile);
 
-      const syncedOrganization = syncOrganizationOwnerMember(organizationId, {
+      const syncedOrganization = await syncOrganizationOwnerMember(organizationId, {
         userId,
         email: updatedProfile.email,
         name: updatedProfile.name,
@@ -340,7 +359,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
     }
   };
 
-  const handleOrganizationSave = () => {
+  const handleOrganizationSave = async () => {
     if (!organizationForm.name.trim()) {
       setError('组织名称不能为空');
       return;
@@ -350,7 +369,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
     setError(null);
 
     try {
-      const updated = updateOrganization(organizationId, {
+      const updated = await updateOrganization(organizationId, {
         name: organizationForm.name.trim(),
         description: organizationForm.description.trim(),
       });
@@ -370,7 +389,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
     }
   };
 
-  const handlePlanChange = (nextPlan: OrganizationPlan) => {
+  const handlePlanChange = async (nextPlan: OrganizationPlan) => {
     if (!organization || organization.plan === nextPlan) {
       return;
     }
@@ -379,7 +398,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
     setError(null);
 
     try {
-      const { organization: updated, error: planError } = changeOrganizationPlan(organizationId, nextPlan);
+      const { organization: updated, error: planError } = await changeOrganizationPlan(organizationId, nextPlan);
 
       if (planError || !updated) {
         setError(translateAuthErrorMessage(planError?.message || 'Plan 计划更新失败'));
@@ -396,7 +415,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
     }
   };
 
-  const handleInviteMember = () => {
+  const handleInviteMember = async () => {
     if (!memberForm.email.trim()) {
       setError('请输入成员邮箱');
       return;
@@ -406,7 +425,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
     setError(null);
 
     try {
-      const { organization: updatedOrganization, error: addError } = addOrganizationMember(organizationId, {
+      const { organization: updatedOrganization, error: addError } = await addOrganizationMember(organizationId, {
         email: memberForm.email.trim(),
         name: memberForm.name.trim(),
         title: memberForm.title.trim(),
@@ -433,10 +452,10 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
     }
   };
 
-  const handleMemberRoleChange = (memberId: string, role: OrganizationMemberRole) => {
+  const handleMemberRoleChange = async (memberId: string, role: OrganizationMemberRole) => {
     setError(null);
 
-    const { organization: updated, error: updateError } = updateOrganizationMember(organizationId, memberId, { role });
+    const { organization: updated, error: updateError } = await updateOrganizationMember(organizationId, memberId, { role });
     if (updateError || !updated) {
       setError(translateAuthErrorMessage(updateError?.message || '成员角色更新失败'));
       return;
@@ -447,10 +466,10 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
     showSuccess('成员角色已更新');
   };
 
-  const handleActivateMember = (memberId: string) => {
+  const handleActivateMember = async (memberId: string) => {
     setError(null);
 
-    const { organization: updated, error: updateError } = updateOrganizationMember(organizationId, memberId, {
+    const { organization: updated, error: updateError } = await updateOrganizationMember(organizationId, memberId, {
       status: 'active',
     });
 
@@ -464,25 +483,22 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
     showSuccess('成员已添加到团队');
   };
 
-  const handleRemoveMember = (memberId: string) => {
-    const removed = removeOrganizationMember(organizationId, memberId);
-    if (!removed) {
-      setError('无法移除该成员');
+  const handleRemoveMember = async (memberId: string) => {
+    const { organization: updatedOrganization, error: removeError } = await removeOrganizationMember(organizationId, memberId);
+    if (removeError || !updatedOrganization) {
+      setError(translateAuthErrorMessage(removeError?.message || '无法移除该成员'));
       return;
     }
 
-    const nextOrganization = getOrganization(organizationId) ?? null;
-    setOrganization(nextOrganization);
-    if (nextOrganization) {
-      onOrganizationUpdated?.(nextOrganization);
-    }
+    setOrganization(updatedOrganization);
+    onOrganizationUpdated?.(updatedOrganization);
     showSuccess('成员已移除');
   };
 
   if (!organization || !profile) {
     return (
       <div className="mx-auto max-w-7xl">
-        <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-slate-500 shadow-sm">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center text-slate-500 shadow-sm">
           正在加载账户与组织设置...
         </div>
       </div>
@@ -587,10 +603,10 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
 
   const renderProfileSection = () => {
     return (
-      <div className="grid gap-5 xl:grid-cols-[248px_minmax(0,1fr)]">
-        <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+      <div className="grid gap-4 xl:grid-cols-[248px_minmax(0,1fr)]">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
           <div className="flex items-center gap-4">
-            <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-slate-900 text-xl font-semibold text-white">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-slate-900 text-xl font-semibold text-white">
               {profileForm.avatarUrl ? (
                 <img src={profileForm.avatarUrl} alt="头像预览" className="h-full w-full object-cover" />
               ) : (
@@ -605,7 +621,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
             </div>
           </div>
 
-          <div className="mt-5 rounded-3xl border border-slate-200 bg-white p-4">
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-3">
             <div className="text-xs uppercase tracking-[0.24em] text-slate-400">资料摘要</div>
             <div className="mt-4 space-y-3 text-sm text-slate-600">
               <div className="flex items-start justify-between gap-4">
@@ -630,7 +646,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
           </div>
         </div>
 
-        <div className="rounded-3xl border border-slate-200 bg-white p-5">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
           <div className="grid gap-4 md:grid-cols-2">
             <div className="md:col-span-2">
               <label className="mb-1.5 block text-sm font-medium text-slate-700">邮箱地址</label>
@@ -698,7 +714,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
               type="button"
               onClick={handleProfileSave}
               disabled={isSavingProfile}
-              className="inline-flex items-center rounded-2xl bg-blue-600 px-5 py-3 font-medium text-white transition hover:bg-blue-700 disabled:bg-blue-400"
+              className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2.5 font-medium text-white transition hover:bg-blue-700 disabled:bg-blue-400"
             >
               {isSavingProfile ? '保存中...' : '保存账户资料'}
             </button>
@@ -710,8 +726,8 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
 
   const renderOrganizationSection = () => {
     return (
-      <div className="space-y-5">
-        <div className="rounded-3xl border border-slate-200 bg-white p-5">
+      <div className="space-y-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
             <div>
               <label className="mb-1.5 block text-sm font-medium text-slate-700">组织名称</label>
@@ -724,7 +740,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
               />
             </div>
 
-            <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
               <div className="text-xs uppercase tracking-[0.22em] text-slate-400">Current Plan</div>
               <div className="mt-3 text-lg font-semibold text-slate-900">{currentPlanDetails.label}</div>
               <div className="mt-1 text-sm text-slate-500">{currentPlanDetails.subtitle}</div>
@@ -750,7 +766,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveSection('plans')}
-                className="mt-5 inline-flex w-full items-center justify-center rounded-2xl bg-blue-600 px-4 py-3 text-sm font-medium text-white transition hover:bg-blue-700"
+                className="mt-4 inline-flex w-full items-center justify-center rounded-xl bg-blue-600 px-3.5 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700"
               >
                 升级计划
               </button>
@@ -769,14 +785,14 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
           </div>
 
           {recommendedPlan !== currentPlan && (
-            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800">
               根据当前团队规模，建议升级到
               <span className="mx-1 font-semibold">{recommendedPlanLabel}</span>
               ，可点击右侧按钮进入独立的 Plan 升级页面。
             </div>
           )}
 
-          <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 px-5 py-4 text-sm text-slate-600">
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
                 当前 owner：
@@ -791,7 +807,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
               type="button"
               onClick={handleOrganizationSave}
               disabled={isSavingOrganization}
-              className="inline-flex items-center rounded-2xl bg-slate-900 px-5 py-3 font-medium text-white transition hover:bg-slate-800 disabled:bg-slate-500"
+              className="inline-flex items-center rounded-xl bg-slate-900 px-4 py-2.5 font-medium text-white transition hover:bg-slate-800 disabled:bg-slate-500"
             >
               {isSavingOrganization ? '保存中...' : '保存组织信息'}
             </button>
@@ -803,9 +819,9 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
 
   const renderPlansSection = () => {
     return (
-      <div className="space-y-5">
-        <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white">
-          <div className="border-b border-slate-100 bg-[radial-gradient(circle_at_top_left,_rgba(186,230,253,0.45),_transparent_55%),linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-5">
+      <div className="space-y-4">
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <div className="border-b border-slate-100 bg-[radial-gradient(circle_at_top_left,_rgba(186,230,253,0.45),_transparent_55%),linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-4">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Plan 计划</div>
@@ -815,7 +831,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                 </p>
               </div>
 
-              <div className="rounded-3xl border border-white/80 bg-white/80 px-4 py-3 shadow-sm backdrop-blur">
+              <div className="rounded-2xl border border-white/80 bg-white/80 px-3.5 py-2.5 shadow-sm backdrop-blur">
                 <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Current Plan</div>
                 <div className="mt-2 flex items-end gap-2">
                   <span className="text-lg font-semibold text-slate-900">{currentPlanDetails.label}</span>
@@ -825,23 +841,23 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
               </div>
             </div>
 
-            <div className="mt-5 grid gap-3 md:grid-cols-3">
-              <div className="rounded-2xl border border-slate-200 bg-white/80 px-4 py-4 text-sm text-slate-600">
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              <div className="rounded-xl border border-slate-200 bg-white/80 px-3 py-3 text-sm text-slate-600">
                 <div className="text-xs uppercase tracking-[0.18em] text-slate-400">成员席位</div>
                 <div className="mt-2 text-lg font-semibold text-slate-900">{memberQuotaLabel}</div>
               </div>
-              <div className="rounded-2xl border border-slate-200 bg-white/80 px-4 py-4 text-sm text-slate-600">
+              <div className="rounded-xl border border-slate-200 bg-white/80 px-3 py-3 text-sm text-slate-600">
                 <div className="text-xs uppercase tracking-[0.18em] text-slate-400">管理员配额</div>
                 <div className="mt-2 text-lg font-semibold text-slate-900">{adminQuotaLabel}</div>
               </div>
-              <div className="rounded-2xl border border-slate-200 bg-white/80 px-4 py-4 text-sm text-slate-600">
+              <div className="rounded-xl border border-slate-200 bg-white/80 px-3 py-3 text-sm text-slate-600">
                 <div className="text-xs uppercase tracking-[0.18em] text-slate-400">可分配角色</div>
                 <div className="mt-2 text-sm font-semibold text-slate-900">{assignableRoleSummary}</div>
               </div>
             </div>
 
             {recommendedPlan !== currentPlan && (
-              <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800">
                 根据当前团队规模，建议升级到
                 <span className="mx-1 font-semibold">{recommendedPlanLabel}</span>
                 ，更适合现阶段的协作强度。
@@ -849,7 +865,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
             )}
           </div>
 
-          <div className="grid gap-4 p-5 xl:grid-cols-3">
+          <div className="grid gap-4 p-4 xl:grid-cols-3">
             {PLAN_OPTIONS.map((option) => {
               const optionLimits = getOrganizationPlanLimits(option.value);
               const optionRoles = getAvailableRolesForPlan(option.value)
@@ -864,7 +880,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
               return (
                 <article
                   key={option.value}
-                  className={`rounded-[28px] border p-5 transition ${
+                  className={`rounded-[24px] border p-4 transition ${
                     isCurrent
                       ? 'border-slate-900 bg-slate-900 text-white shadow-xl'
                       : isRecommended
@@ -907,19 +923,19 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                   </div>
 
                   <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                    <div className={`rounded-2xl border px-3 py-3 text-center ${isCurrent ? 'border-white/10 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
+                    <div className={`rounded-xl border px-3 py-2.5 text-center ${isCurrent ? 'border-white/10 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
                       <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">成员</div>
                       <div className={`mt-2 text-sm font-semibold ${isCurrent ? 'text-white' : 'text-slate-900'}`}>
                         {formatQuotaLimit(optionLimits.maxMembers)}
                       </div>
                     </div>
-                    <div className={`rounded-2xl border px-3 py-3 text-center ${isCurrent ? 'border-white/10 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
+                    <div className={`rounded-xl border px-3 py-2.5 text-center ${isCurrent ? 'border-white/10 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
                       <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">管理员</div>
                       <div className={`mt-2 text-sm font-semibold ${isCurrent ? 'text-white' : 'text-slate-900'}`}>
                         {formatQuotaLimit(optionLimits.maxAdmins)}
                       </div>
                     </div>
-                    <div className={`rounded-2xl border px-3 py-3 text-center ${isCurrent ? 'border-white/10 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
+                    <div className={`rounded-xl border px-3 py-2.5 text-center ${isCurrent ? 'border-white/10 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
                       <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">角色</div>
                       <div className={`mt-2 text-xs font-medium leading-5 ${isCurrent ? 'text-slate-200' : 'text-slate-700'}`}>
                         {optionRoles}
@@ -952,7 +968,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                     type="button"
                     onClick={() => handlePlanChange(option.value)}
                     disabled={isCurrent || isChangingPlan !== null || Boolean(planChangeError)}
-                    className={`mt-6 inline-flex w-full items-center justify-center rounded-2xl px-4 py-3 text-sm font-medium transition ${
+                    className={`mt-6 inline-flex w-full items-center justify-center rounded-xl px-3.5 py-2.5 text-sm font-medium transition ${
                       isCurrent
                         ? 'cursor-default bg-white/10 text-slate-300'
                         : option.value === 'enterprise'
@@ -966,7 +982,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                   </button>
 
                   {planChangeError && !isCurrent && (
-                    <div className={`mt-3 rounded-2xl border px-3 py-3 text-sm ${
+                    <div className={`mt-3 rounded-xl border px-3 py-2.5 text-sm ${
                       isRecommended ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-slate-200 bg-slate-50 text-slate-600'
                     }`}>
                       {translateAuthErrorMessage(planChangeError)}
@@ -983,47 +999,43 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
 
   const renderMembersSection = () => {
     return (
-      <div className="space-y-5">
-        <div className="rounded-3xl border border-slate-200 bg-white p-5">
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+      <div className="space-y-4">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.8fr)_320px]">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div>
                 <h3 className="text-lg font-semibold text-slate-900">成员邀请</h3>
                 <p className="mt-1 text-sm text-slate-500">
-                  先创建邀请，再在下方表格里执行添加或移除，整个成员流转保持上下结构即可。
+                  先发送邀请，再在下方列表里完成确认加入、角色调整或移除，整个流程保持单页闭环。
                 </p>
               </div>
 
               <div className="flex flex-wrap gap-2 text-xs text-slate-500">
-                <span className="rounded-full bg-slate-100 px-3 py-1">当前 Plan：{planLabel}</span>
-                <span className="rounded-full bg-slate-100 px-3 py-1">可分配角色：{assignableRoleSummary}</span>
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5">当前 Plan：{planLabel}</span>
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5">可分配角色：{assignableRoleSummary}</span>
               </div>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-xs uppercase tracking-[0.2em] text-slate-400">已加入</div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">已加入</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{activeMembersCount}</div>
               </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-xs uppercase tracking-[0.2em] text-slate-400">待接受</div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">待接受</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{pendingMembersCount}</div>
               </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-xs uppercase tracking-[0.2em] text-slate-400">管理员</div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">管理员</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">{managersCount}</div>
               </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-xs uppercase tracking-[0.2em] text-slate-400">成员席位</div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">成员席位</div>
                 <div className="mt-2 text-lg font-semibold text-slate-900">{memberQuotaLabel}</div>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-xs uppercase tracking-[0.2em] text-slate-400">管理员配额</div>
-                <div className="mt-2 text-lg font-semibold text-slate-900">{adminQuotaLabel}</div>
               </div>
             </div>
 
-            <div className={`rounded-2xl border px-4 py-3 text-sm ${
+            <div className={`mt-4 rounded-xl border px-3.5 py-2.5 text-sm ${
               isMemberQuotaFull
                 ? 'border-amber-200 bg-amber-50 text-amber-800'
                 : 'border-sky-200 bg-sky-50 text-sky-700'
@@ -1035,13 +1047,13 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                 </>
               ) : (
                 <>
-                  邀请成员后会先进入待接受列表；确认加入时，可在下方表格点击“添加”转为已加入。
+                  邀请成员后会先进入待接受列表；确认加入时，可在下方直接点击“添加”转为已加入。
                 </>
               )}
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-12">
-              <div className="lg:col-span-4">
+            <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,0.9fr)_minmax(0,1.2fr)_minmax(0,0.9fr)]">
+              <div>
                 <label className="mb-1.5 block text-sm font-medium text-slate-700">成员邮箱</label>
                 <input
                   type="email"
@@ -1053,7 +1065,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                 />
               </div>
 
-              <div className="lg:col-span-2">
+              <div>
                 <label className="mb-1.5 block text-sm font-medium text-slate-700">姓名</label>
                 <input
                   type="text"
@@ -1065,7 +1077,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                 />
               </div>
 
-              <div className="lg:col-span-3">
+              <div>
                 <label className="mb-1.5 block text-sm font-medium text-slate-700">职位</label>
                 <input
                   type="text"
@@ -1077,7 +1089,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                 />
               </div>
 
-              <div className="lg:col-span-3">
+              <div>
                 <label className="mb-1.5 block text-sm font-medium text-slate-700">角色</label>
                 <select
                   value={memberForm.role}
@@ -1094,21 +1106,57 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
               </div>
             </div>
 
-            <div className="flex justify-end">
+            <div className="mt-4 flex justify-end">
               <button
                 type="button"
                 onClick={handleInviteMember}
                 disabled={isInvitingMember || isMemberQuotaFull}
-                className="inline-flex items-center rounded-2xl bg-blue-600 px-5 py-3 font-medium text-white transition hover:bg-blue-700 disabled:bg-blue-400"
+                className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2.5 font-medium text-white transition hover:bg-blue-700 disabled:bg-blue-400"
               >
                 {isInvitingMember ? '邀请中...' : '邀请成员'}
               </button>
             </div>
           </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-sm font-semibold text-slate-900">当前协作限制</div>
+            <div className="mt-4 space-y-3 text-sm text-slate-600">
+              <div className="flex items-start justify-between gap-4 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5">
+                <span>成员席位</span>
+                <span className="font-semibold text-slate-900">{memberQuotaLabel}</span>
+              </div>
+              <div className="flex items-start justify-between gap-4 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5">
+                <span>管理员配额</span>
+                <span className="font-semibold text-slate-900">{adminQuotaLabel}</span>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5">
+                <div className="text-slate-500">可分配角色</div>
+                <div className="mt-1 font-semibold text-slate-900">{assignableRoleSummary}</div>
+              </div>
+            </div>
+
+            {(recommendedPlan !== currentPlan || isMemberQuotaFull) && (
+              <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800">
+                {isMemberQuotaFull
+                  ? nextPlanLabel
+                    ? `当前席位已满，建议切换到 ${nextPlanLabel} 后继续扩充成员。`
+                    : '当前席位已满，且当前已是最高档 Plan。'
+                  : `按当前团队规模，更适合使用 ${recommendedPlanLabel}。`}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setActiveSection('plans')}
+              className="mt-4 inline-flex w-full items-center justify-center rounded-xl bg-slate-900 px-3.5 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800"
+            >
+              查看 Plan 方案
+            </button>
+          </div>
         </div>
 
-        <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white">
-          <div className="flex flex-col gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <div className="flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h3 className="text-lg font-semibold text-slate-900">成员列表</h3>
               <p className="mt-1 text-sm text-slate-500">表格内可直接调整角色，并对待接受成员执行添加或移除。</p>
@@ -1123,13 +1171,13 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
             <table className="min-w-[1080px] w-full divide-y divide-slate-100">
               <thead className="bg-slate-50 text-left text-xs uppercase tracking-[0.18em] text-slate-500">
                 <tr>
-                  <th className="w-[188px] px-5 py-4 font-medium">成员</th>
-                  <th className="w-[188px] px-5 py-4 font-medium">邮箱</th>
-                  <th className="w-[188px] px-5 py-4 font-medium">职位</th>
-                  <th className="w-[108px] px-5 py-4 font-medium whitespace-nowrap">状态</th>
-                  <th className="w-[168px] px-5 py-4 font-medium whitespace-nowrap">角色</th>
-                  <th className="w-[132px] px-5 py-4 font-medium whitespace-nowrap">加入时间</th>
-                  <th className="w-[156px] px-5 py-4 text-right font-medium whitespace-nowrap">操作</th>
+                  <th className="w-[188px] px-4 py-3 font-medium">成员</th>
+                  <th className="w-[188px] px-4 py-3 font-medium">邮箱</th>
+                  <th className="w-[188px] px-4 py-3 font-medium">职位</th>
+                  <th className="w-[108px] px-4 py-3 font-medium whitespace-nowrap">状态</th>
+                  <th className="w-[168px] px-4 py-3 font-medium whitespace-nowrap">角色</th>
+                  <th className="w-[132px] px-4 py-3 font-medium whitespace-nowrap">加入时间</th>
+                  <th className="w-[156px] px-4 py-3 text-right font-medium whitespace-nowrap">操作</th>
                 </tr>
               </thead>
 
@@ -1140,9 +1188,9 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
 
                   return (
                     <tr key={member.id} className="align-middle transition hover:bg-slate-50/80">
-                      <td className="px-5 py-4">
+                      <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
-                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-900 font-semibold text-white">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-900 font-semibold text-white">
                             {memberInitial || '?'}
                           </div>
 
@@ -1157,19 +1205,19 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                         </div>
                       </td>
 
-                      <td className="px-5 py-4 text-sm text-slate-600">{member.email || '未设置邮箱'}</td>
-                      <td className="px-5 py-4 text-sm text-slate-600">{member.title || '未设置职位'}</td>
-                      <td className="px-5 py-4 whitespace-nowrap">
+                      <td className="px-4 py-3 text-sm text-slate-600">{member.email || '未设置邮箱'}</td>
+                      <td className="px-4 py-3 text-sm text-slate-600">{member.title || '未设置职位'}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">
                         <span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium ${getMemberStatusClassName(member.status)}`}>
                           {getMemberStatusLabel(member.status)}
                         </span>
                       </td>
-                      <td className="px-5 py-4 whitespace-nowrap">
+                      <td className="px-4 py-3 whitespace-nowrap">
                         <select
                           value={member.role}
                           disabled={isProtectedOwner}
                           onChange={(event) => handleMemberRoleChange(member.id, event.target.value as OrganizationMemberRole)}
-                          className="w-full min-w-[148px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 transition focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:bg-slate-100 disabled:text-slate-500"
+                          className="w-full min-w-[148px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 transition focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:bg-slate-100 disabled:text-slate-500"
                         >
                           {ROLE_OPTIONS.map((option) => (
                             <option key={option.value} value={option.value} disabled={isRoleOptionDisabled(option.value, member.role)}>
@@ -1178,14 +1226,14 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                           ))}
                         </select>
                       </td>
-                      <td className="px-5 py-4 text-sm text-slate-600 whitespace-nowrap">{formatMemberJoinedAt(member.joinedAt)}</td>
-                      <td className="px-5 py-4 whitespace-nowrap">
+                      <td className="px-4 py-3 text-sm text-slate-600 whitespace-nowrap">{formatMemberJoinedAt(member.joinedAt)}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">
                         <div className="flex flex-nowrap items-center justify-end gap-2">
                           {member.status === 'invited' && !isProtectedOwner && (
                             <button
                               type="button"
                               onClick={() => handleActivateMember(member.id)}
-                              className="inline-flex min-w-[72px] items-center justify-center whitespace-nowrap rounded-xl bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition hover:bg-blue-100"
+                              className="inline-flex min-w-[72px] items-center justify-center whitespace-nowrap rounded-lg bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition hover:bg-blue-100"
                             >
                               添加
                             </button>
@@ -1195,7 +1243,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                             <button
                               type="button"
                               onClick={() => handleRemoveMember(member.id)}
-                              className="inline-flex min-w-[72px] items-center justify-center whitespace-nowrap rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-600 transition hover:bg-red-100"
+                              className="inline-flex min-w-[72px] items-center justify-center whitespace-nowrap rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-600 transition hover:bg-red-100"
                             >
                               移除
                             </button>
@@ -1229,55 +1277,56 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1400px]">
-      <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)] xl:items-start">
-        <aside className="space-y-3 xl:sticky xl:top-8">
-          <div className="rounded-[32px] bg-slate-900 p-5 text-white shadow-xl">
-            <button
-              type="button"
-              onClick={onBack}
-              className="inline-flex items-center gap-2 text-sm text-slate-300 transition hover:text-white"
-            >
-              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-              </svg>
-              返回工作台
-            </button>
+    <div className="mx-auto w-full max-w-[1360px]">
+      <div className="grid gap-5 xl:grid-cols-[248px_minmax(0,1fr)] xl:items-start">
+        <aside className="space-y-3 xl:sticky xl:top-6">
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-900"
+          >
+            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            返回工作台
+          </button>
 
-            <div className="mt-6">
-              <div className="text-xs uppercase tracking-[0.24em] text-slate-400">设置中心</div>
-              <h1 className="mt-3 text-2xl font-semibold">账户与组织管理</h1>
-            </div>
+          <div className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="text-xs uppercase tracking-[0.22em] text-slate-400">设置中心</div>
+            <h1 className="mt-3 text-[28px] font-semibold leading-tight text-slate-900">账户与组织管理</h1>
 
-            <div className="mt-5 rounded-3xl border border-white/10 bg-white/5 p-4">
-              <div className="break-words text-lg font-semibold">{displayedOrganizationName}</div>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <span className="rounded-full bg-cyan-500/15 px-3 py-1 text-xs font-medium text-cyan-100">
-                  {planLabel}
-                </span>
-                <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-slate-200">
-                  {organization.members.length} 位成员
-                </span>
+            <div className="mt-4 rounded-2xl bg-slate-900 p-3.5 text-white">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10 text-sm font-semibold text-white">
+                  {displayedOrganizationName.trim().charAt(0) || 'P'}
+                </div>
+                <div className="min-w-0">
+                  <div className="break-words text-base font-semibold">{displayedOrganizationName}</div>
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                    <span className="rounded-full bg-cyan-500/15 px-2.5 py-1 text-cyan-100">{planLabel}</span>
+                    <span className="rounded-full bg-white/10 px-2.5 py-1 text-slate-200">{organization.members.length} 位成员</span>
+                  </div>
+                </div>
               </div>
-            </div>
 
-            <div className="mt-4 grid grid-cols-3 gap-3 text-center">
-              <div className="rounded-2xl bg-white/10 px-3 py-4">
-                <div className="text-xs text-slate-400">已激活</div>
-                <div className="mt-2 text-xl font-semibold">{activeMembersCount}</div>
-              </div>
-              <div className="rounded-2xl bg-white/10 px-3 py-4">
-                <div className="text-xs text-slate-400">管理员</div>
-                <div className="mt-2 text-xl font-semibold">{managersCount}</div>
-              </div>
-              <div className="rounded-2xl bg-white/10 px-3 py-4">
-                <div className="text-xs text-slate-400">待接受</div>
-                <div className="mt-2 text-xl font-semibold">{pendingMembersCount}</div>
+              <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-xl bg-white/10 px-2 py-2.5">
+                  <div className="text-[11px] text-slate-400">已激活</div>
+                  <div className="mt-1 text-lg font-semibold">{activeMembersCount}</div>
+                </div>
+                <div className="rounded-xl bg-white/10 px-2 py-2.5">
+                  <div className="text-[11px] text-slate-400">管理员</div>
+                  <div className="mt-1 text-lg font-semibold">{managersCount}</div>
+                </div>
+                <div className="rounded-xl bg-white/10 px-2 py-2.5">
+                  <div className="text-[11px] text-slate-400">待接受</div>
+                  <div className="mt-1 text-lg font-semibold">{pendingMembersCount}</div>
+                </div>
               </div>
             </div>
           </div>
 
-          <nav className="rounded-[32px] border border-slate-200 bg-white p-2.5 shadow-sm">
+          <nav className="rounded-[24px] border border-slate-200 bg-white p-2 shadow-sm">
             <div className="space-y-2">
               {sectionItems.map((item) => {
                 const isActive = item.id === activeSection;
@@ -1287,7 +1336,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                     key={item.id}
                     type="button"
                     onClick={() => setActiveSection(item.id)}
-                    className={`w-full rounded-3xl px-4 py-4 text-left transition ${
+                    className={`w-full rounded-2xl px-3.5 py-3 text-left transition ${
                       isActive
                         ? 'bg-slate-900 text-white shadow-lg'
                         : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
@@ -1312,37 +1361,38 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
 
         <div className="min-w-0 space-y-3">
           {error && (
-            <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {error}
             </div>
           )}
 
           {success && (
-            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm text-emerald-700">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
               {success}
             </div>
           )}
 
-          <section className="rounded-[32px] border border-slate-200 bg-white p-5 shadow-sm md:p-6">
-            <div className="flex flex-col gap-3 border-b border-slate-100 pb-5 md:flex-row md:items-center md:justify-between">
+          <section className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm md:p-5">
+            <div className="flex flex-col gap-4 border-b border-slate-100 pb-4 md:flex-row md:items-end md:justify-between">
               <div>
                 <div className="inline-flex rounded-full bg-sky-50 px-3 py-1 text-xs font-medium tracking-[0.18em] text-sky-700">
                   {currentSection.eyebrow}
                 </div>
                 <h2 className="mt-3 text-2xl font-semibold text-slate-900 md:text-[30px]">{currentSection.title}</h2>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">{currentSection.description}</p>
               </div>
 
               <div className="flex flex-wrap gap-2 text-sm">
-                <span className="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-slate-600">
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-3.5 py-1.5 text-slate-600">
                   {displayedOrganizationName}
                 </span>
-                <span className="rounded-full bg-sky-50 px-4 py-2 font-medium text-sky-700">
+                <span className="rounded-full bg-sky-50 px-3.5 py-1.5 font-medium text-sky-700">
                   {planLabel}
                 </span>
               </div>
             </div>
 
-            <div className="pt-5">{renderSectionContent()}</div>
+            <div className="pt-4">{renderSectionContent()}</div>
           </section>
         </div>
       </div>

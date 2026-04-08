@@ -5,11 +5,14 @@ import {
   DraftingProgress,
   PatentData,
   PatentType,
+  PatentStatus,
   TechnicalField,
 } from "../types";
 import { generateUuid } from "./idService";
+import { supabase } from "./supabaseService";
 
 const STORAGE_KEY = "patent_pro_data";
+const SUPABASE_PATENTS_TABLE = "patent_projects";
 const TECHNICAL_FIELDS: readonly TechnicalField[] = [
   "AI",
   "新能源",
@@ -22,6 +25,37 @@ const TECHNICAL_FIELDS: readonly TechnicalField[] = [
   "生物",
   "材料",
 ];
+
+interface PatentProjectRow {
+  id: string;
+  user_id: string;
+  organization_id: string | null;
+  title: string;
+  status: PatentStatus;
+  patent_type: PatentType | null;
+  technical_field: string | null;
+  created_at: number;
+  last_modified: number;
+  payload: PatentData;
+}
+
+const normalizeString = (value: unknown): string => {
+  return typeof value === "string" ? value : "";
+};
+
+const isSupabaseRelationMissingError = (
+  error: { code?: string; message?: string } | null | undefined,
+): boolean => {
+  if (!error) {
+    return false;
+  }
+
+  return (
+    error.code === "42P01" ||
+    /relation .* does not exist/i.test(error.message ?? "") ||
+    /Could not find the table/i.test(error.message ?? "")
+  );
+};
 
 const normalizeStringArray = (value: unknown): string[] => {
   if (!Array.isArray(value)) return [];
@@ -143,6 +177,8 @@ const normalizePatentData = (patent: Partial<PatentData>): PatentData => {
     createdAt: typeof patent.createdAt === "number" ? patent.createdAt : now,
     lastModified:
       typeof patent.lastModified === "number" ? patent.lastModified : now,
+    userId: normalizeString(patent.userId),
+    organizationId: normalizeString(patent.organizationId),
     // New fields for Step 3-4
     patentType: patent.patentType,
     selectedTechnicalField: normalizeSelectedTechnicalField(
@@ -189,6 +225,242 @@ const normalizePatentData = (patent: Partial<PatentData>): PatentData => {
   };
 };
 
+const filterPatentsByScope = (
+  patents: PatentData[],
+  filters: {
+    userId?: string | null;
+    organizationId?: string | null;
+  } = {},
+): PatentData[] => {
+  return patents.filter((patent) => {
+    if (filters.organizationId) {
+      return patent.organizationId === filters.organizationId;
+    }
+
+    if (filters.userId) {
+      return patent.userId === filters.userId;
+    }
+
+    return true;
+  });
+};
+
+const sortPatentsByModified = (patents: PatentData[]): PatentData[] => {
+  return [...patents].sort((left, right) => right.lastModified - left.lastModified);
+};
+
+const writePatentsToCache = (patents: PatentData[]): void => {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(patents));
+};
+
+const upsertPatentInCache = (patent: PatentData): PatentData[] => {
+  const patents = getPatents();
+  const index = patents.findIndex((item) => item.id === patent.id);
+
+  if (index >= 0) {
+    patents[index] = patent;
+  } else {
+    patents.push(patent);
+  }
+
+  writePatentsToCache(patents);
+  return patents;
+};
+
+const removePatentFromCache = (id: string): PatentData[] => {
+  const patents = getPatents().filter((patent) => patent.id !== id);
+  writePatentsToCache(patents);
+  return patents;
+};
+
+const mapPatentToRow = (patent: PatentData): PatentProjectRow => {
+  const normalizedPatent = normalizePatentData(patent);
+
+  return {
+    id: normalizedPatent.id,
+    user_id: normalizedPatent.userId || "",
+    organization_id: normalizedPatent.organizationId || null,
+    title: normalizedPatent.title,
+    status: normalizedPatent.status,
+    patent_type: normalizedPatent.patentType ?? null,
+    technical_field:
+      normalizedPatent.selectedTechnicalField ??
+      normalizedPatent.technicalField ??
+      null,
+    created_at: normalizedPatent.createdAt,
+    last_modified: normalizedPatent.lastModified,
+    payload: normalizedPatent,
+  };
+};
+
+const mapRowToPatent = (row: Partial<PatentProjectRow>): PatentData => {
+  const payload = row.payload && typeof row.payload === "object"
+    ? (row.payload as Partial<PatentData>)
+    : {};
+
+  return normalizePatentData({
+    ...payload,
+    id: normalizeString(row.id) || payload.id,
+    userId: normalizeString(row.user_id) || payload.userId,
+    organizationId:
+      normalizeString(row.organization_id) || payload.organizationId,
+    title: normalizeString(row.title) || payload.title,
+    status: (row.status as PatentStatus) || payload.status,
+    patentType: (row.patent_type as PatentType | null) ?? payload.patentType,
+    technicalField:
+      normalizeString(row.technical_field) || payload.technicalField,
+    selectedTechnicalField:
+      normalizeSelectedTechnicalField(row.technical_field) ??
+      payload.selectedTechnicalField,
+    createdAt:
+      typeof row.created_at === "number" ? row.created_at : payload.createdAt,
+    lastModified:
+      typeof row.last_modified === "number"
+        ? row.last_modified
+        : payload.lastModified,
+  });
+};
+
+const mergeRemotePatentsIntoCache = (remotePatents: PatentData[]): PatentData[] => {
+  const nextPatentsById = new Map<string, PatentData>();
+
+  getPatents().forEach((patent) => {
+    nextPatentsById.set(patent.id, patent);
+  });
+
+  remotePatents.forEach((patent) => {
+    nextPatentsById.set(patent.id, patent);
+  });
+
+  const mergedPatents = Array.from(nextPatentsById.values());
+  writePatentsToCache(mergedPatents);
+  return mergedPatents;
+};
+
+const persistPatentToSupabase = async (patent: PatentData): Promise<Error | null> => {
+  if (!supabase) {
+    return null;
+  }
+
+  const row = mapPatentToRow(patent);
+  if (!row.user_id) {
+    return new Error("Patent user is required for Supabase persistence");
+  }
+
+  const { error } = await supabase
+    .from(SUPABASE_PATENTS_TABLE)
+    .upsert(row, { onConflict: "id" });
+
+  if (!error) {
+    return null;
+  }
+
+  if (isSupabaseRelationMissingError(error)) {
+    console.error(
+      "Supabase table patent_projects is missing. Run the SQL migration before enabling cloud persistence.",
+      error,
+    );
+  } else {
+    console.error("persistPatentToSupabase failed:", error);
+  }
+
+  return error;
+};
+
+const loadPatentsFromSupabase = async (
+  filters: {
+    userId?: string | null;
+    organizationId?: string | null;
+  } = {},
+): Promise<PatentData[] | null> => {
+  if (!supabase) {
+    return null;
+  }
+
+  let query = supabase.from(SUPABASE_PATENTS_TABLE).select("*");
+
+  if (filters.organizationId) {
+    query = query.eq("organization_id", filters.organizationId);
+  } else if (filters.userId) {
+    query = query.eq("user_id", filters.userId);
+  }
+
+  const { data, error } = await query.order("last_modified", { ascending: false });
+
+  if (error) {
+    if (isSupabaseRelationMissingError(error)) {
+      console.error(
+        "Supabase table patent_projects is missing. Falling back to local patent cache.",
+        error,
+      );
+    } else {
+      console.error("loadPatentsFromSupabase failed:", error);
+    }
+
+    return null;
+  }
+
+  if (!Array.isArray(data)) {
+    return [];
+  }
+
+  return data.map((row) => mapRowToPatent(row as Partial<PatentProjectRow>));
+};
+
+/**
+ * 从 Supabase 拉取当前用户或组织范围内的项目，并刷新本地缓存。
+ * @param filters 可选的用户或组织过滤条件。
+ * @returns 远端可用时返回远端项目，否则回退到本地缓存结果。
+ */
+export const loadPatents = async (
+  filters: {
+    userId?: string | null;
+    organizationId?: string | null;
+  } = {},
+): Promise<PatentData[]> => {
+  const remotePatents = await loadPatentsFromSupabase(filters);
+  if (!remotePatents) {
+    return sortPatentsByModified(filterPatentsByScope(getPatents(), filters));
+  }
+
+  mergeRemotePatentsIntoCache(remotePatents);
+  return sortPatentsByModified(filterPatentsByScope(remotePatents, filters));
+};
+
+/**
+ * 将当前用户范围内的本地项目同步到 Supabase，常用于登录后补齐历史草稿。
+ * @param userId 当前用户 ID。
+ * @param organizationId 当前组织 ID。
+ * @returns 成功写入远端的项目数量。
+ */
+export const syncPatentsToSupabase = async (
+  userId: string,
+  organizationId?: string | null,
+): Promise<number> => {
+  if (!supabase) {
+    return 0;
+  }
+
+  const patents = getPatents();
+  let syncedCount = 0;
+
+  for (const patent of patents) {
+    const nextPatent = normalizePatentData({
+      ...patent,
+      userId: patent.userId || userId,
+      organizationId: patent.organizationId || organizationId || "",
+    });
+
+    upsertPatentInCache(nextPatent);
+    const error = await persistPatentToSupabase(nextPatent);
+    if (!error) {
+      syncedCount += 1;
+    }
+  }
+
+  return syncedCount;
+};
+
 /**
  * 从 localStorage 读取并规范化所有专利项目数据。
  * @returns 已兼容旧版本字段的专利数据列表；读取失败时返回空数组。
@@ -217,35 +489,56 @@ export const getPatentById = (id: string): PatentData | undefined => {
 };
 
 /**
- * 将单个专利项目保存到 localStorage，并自动更新时间戳。
+ * 将单个专利项目保存到本地缓存，并在可用时同步写入 Supabase。
  * @param patent 待保存的专利项目数据。
  */
-export const savePatentToStorage = (patent: PatentData): void => {
-  const patents = getPatents();
-  const index = patents.findIndex((p) => p.id === patent.id);
-
-  const updatedPatent = {
-    ...normalizePatentData(patent),
+export const savePatentToStorage = async (
+  patent: PatentData,
+): Promise<{ patent: PatentData; error: Error | null }> => {
+  const updatedPatent = normalizePatentData({
+    ...patent,
     lastModified: Date.now(),
+  });
+
+  upsertPatentInCache(updatedPatent);
+  const error = await persistPatentToSupabase(updatedPatent);
+
+  return {
+    patent: updatedPatent,
+    error,
   };
-
-  if (index >= 0) {
-    patents[index] = updatedPatent;
-  } else {
-    patents.push(updatedPatent);
-  }
-
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(patents));
 };
 
 /**
- * 删除指定 ID 的专利项目。
+ * 删除指定 ID 的专利项目，并同步删除 Supabase 中的同名记录。
  * @param id 项目唯一标识。
  */
-export const deletePatentFromStorage = (id: string): void => {
-  const patents = getPatents();
-  const newPatents = patents.filter((p) => p.id !== id);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(newPatents));
+export const deletePatentFromStorage = async (id: string): Promise<Error | null> => {
+  removePatentFromCache(id);
+
+  if (!supabase) {
+    return null;
+  }
+
+  const { error } = await supabase
+    .from(SUPABASE_PATENTS_TABLE)
+    .delete()
+    .eq("id", id);
+
+  if (!error) {
+    return null;
+  }
+
+  if (isSupabaseRelationMissingError(error)) {
+    console.error(
+      "Supabase table patent_projects is missing. Run the SQL migration before enabling cloud persistence.",
+      error,
+    );
+  } else {
+    console.error("deletePatentFromStorage failed:", error);
+  }
+
+  return error;
 };
 
 /**

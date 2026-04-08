@@ -280,6 +280,37 @@ export const translateAuthErrorMessage = (message: string): string => {
     return "未找到当前组织，请重新登录后再试";
   }
 
+  if (normalizedMessage.includes("Patent user is required for Supabase persistence")) {
+    return "项目缺少用户归属，暂时无法同步到数据库，请重新登录后重试";
+  }
+
+  if (normalizedMessage.includes("Member cannot be removed")) {
+    return "该成员无法移除，请确认不是当前组织所有者";
+  }
+
+  if (
+    /relation .* does not exist/i.test(normalizedMessage) ||
+    normalizedMessage.includes("Could not find the table") ||
+    normalizedMessage.includes("patent_projects") ||
+    normalizedMessage.includes("organizations")
+  ) {
+    return "Supabase 数据表尚未创建，请先执行项目附带的 SQL 初始化脚本";
+  }
+
+  if (
+    normalizedMessage.includes("row-level security") ||
+    normalizedMessage.includes("violates row-level security policy")
+  ) {
+    return "Supabase 行级安全策略阻止了本次写入，请检查 organizations 和 patent_projects 的 RLS 策略";
+  }
+
+  if (
+    normalizedMessage.includes("permission denied") ||
+    normalizedMessage.includes("42501")
+  ) {
+    return "Supabase 权限不足，请检查当前表权限与 RLS 配置";
+  }
+
   if (normalizedMessage.includes("No active session")) {
     return "当前未登录，请重新登录后再试";
   }

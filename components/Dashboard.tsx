@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { PatentData, PatentStatus, DraftingStage } from '../types';
-import { getPatents, deletePatentFromStorage } from '../services/storageService';
+import { loadPatents, deletePatentFromStorage } from '../services/storageService';
 import { BusinessStageKey, getPatentBusinessStageKey, getPatentJourneyMeta } from '../workflow';
 
 // Maps drafting stage keys to display labels
@@ -233,24 +233,16 @@ const Dashboard: React.FC<DashboardProps> = ({
         { disclosure: 0, evaluation: 0, drafting: 0, finalization: 0, ready: 0 },
     );
 
-    const loadPatents = () => {
-        const data = getPatents().filter((patent) => {
-            if (currentOrganizationId) {
-                return patent.organizationId === currentOrganizationId;
-            }
-
-            if (currentUserId) {
-                return patent.userId === currentUserId;
-            }
-
-            return true;
+    const loadPatentItems = async () => {
+        const data = await loadPatents({
+            userId: currentUserId,
+            organizationId: currentOrganizationId,
         });
-        // Sort by last modified descending
-        setPatents(data.sort((a, b) => b.lastModified - a.lastModified));
+        setPatents(data);
     };
 
     useEffect(() => {
-        loadPatents();
+        void loadPatentItems();
     }, [currentOrganizationId, currentUserId]);
 
     const handleDeleteClick = (e: React.MouseEvent, id: string) => {
@@ -260,9 +252,11 @@ const Dashboard: React.FC<DashboardProps> = ({
 
     const confirmDelete = () => {
         if (deleteCandidateId) {
-            deletePatentFromStorage(deleteCandidateId);
-            loadPatents();
-            setDeleteCandidateId(null);
+            void (async () => {
+                await deletePatentFromStorage(deleteCandidateId);
+                await loadPatentItems();
+                setDeleteCandidateId(null);
+            })();
         }
     };
 

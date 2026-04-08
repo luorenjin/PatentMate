@@ -60,7 +60,7 @@ const PatentDraft: React.FC<PatentDraftProps> = ({
     updatePatentData('selectedTechnicalField', field);
     updatePatentData('title', title);
     updatePatentData('disclosureData', { ...disclosureData, field, title });
-    savePatentToStorage({ ...patentData, selectedTechnicalField: field, title, disclosureData: { ...disclosureData, field, title }, lastModified: Date.now() });
+    void savePatentToStorage({ ...patentData, selectedTechnicalField: field, title, disclosureData: { ...disclosureData, field, title }, lastModified: Date.now() });
     setStep('wizard');
   };
 
@@ -73,7 +73,7 @@ const PatentDraft: React.FC<PatentDraftProps> = ({
       newAnswers.push({ questionId, answer, lastModified: Date.now() });
     }
     updatePatentData('disclosureData', { ...disclosureData, answers: newAnswers });
-    savePatentToStorage({ ...patentData, disclosureData: { ...disclosureData, answers: newAnswers }, lastModified: Date.now() });
+    void savePatentToStorage({ ...patentData, disclosureData: { ...disclosureData, answers: newAnswers }, lastModified: Date.now() });
   };
 
   const handleWizardComplete = () => {
@@ -132,7 +132,7 @@ const PatentDraft: React.FC<PatentDraftProps> = ({
       ...updates,
       lastModified: Date.now()
     } as PatentData;
-    savePatentToStorage(updatedPatent);
+    void savePatentToStorage(updatedPatent);
     
     onNext();
   };

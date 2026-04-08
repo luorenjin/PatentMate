@@ -1,7 +1,9 @@
 import { generateUuid } from "./idService";
 import { getPatents, savePatentToStorage } from "./storageService";
+import { supabase } from "./supabaseService";
 
 const ORGANIZATIONS_KEY = "patent_pro_organizations";
+const SUPABASE_ORGANIZATIONS_TABLE = "organizations";
 const DEFAULT_ORGANIZATION_NAME = "我的团队";
 const ORGANIZATION_PLANS = ["free", "team", "enterprise"] as const;
 const ORGANIZATION_MEMBER_ROLES = [
@@ -92,6 +94,18 @@ export interface OrganizationMutationResult {
   error: Error | null;
 }
 
+interface OrganizationRow {
+  id: string;
+  name: string;
+  description: string;
+  plan: OrganizationPlan;
+  owner_id: string;
+  owner_email: string;
+  created_at: number;
+  last_modified: number;
+  payload: Organization;
+}
+
 const ORGANIZATION_PLAN_LIMITS: Record<OrganizationPlan, OrganizationPlanLimits> = {
   free: {
     maxMembers: 3,
@@ -112,6 +126,20 @@ const ORGANIZATION_PLAN_LIMITS: Record<OrganizationPlan, OrganizationPlanLimits>
 
 const normalizeString = (value: unknown): string => {
   return typeof value === "string" ? value : "";
+};
+
+const isSupabaseRelationMissingError = (
+  error: { code?: string; message?: string } | null | undefined,
+): boolean => {
+  if (!error) {
+    return false;
+  }
+
+  return (
+    error.code === "42P01" ||
+    /relation .* does not exist/i.test(error.message ?? "") ||
+    /Could not find the table/i.test(error.message ?? "")
+  );
 };
 
 const normalizePlan = (value: unknown): OrganizationPlan => {
@@ -275,6 +303,194 @@ const upsertOrganization = (organization: Organization): Organization[] => {
 
   saveOrganizations(nextOrganizations);
   return nextOrganizations;
+};
+
+const filterOrganizations = (
+  organizations: Organization[],
+  filters: {
+    orgId?: string;
+    ownerId?: string;
+  } = {},
+): Organization[] => {
+  return organizations.filter((organization) => {
+    if (filters.orgId && organization.id !== filters.orgId) {
+      return false;
+    }
+
+    if (filters.ownerId && organization.ownerId !== filters.ownerId) {
+      return false;
+    }
+
+    return true;
+  });
+};
+
+const mapOrganizationToRow = (organization: Organization): OrganizationRow => {
+  const normalizedOrganization = normalizeOrganization(organization);
+
+  return {
+    id: normalizedOrganization.id,
+    name: normalizedOrganization.name,
+    description: normalizedOrganization.description,
+    plan: normalizedOrganization.plan,
+    owner_id: normalizedOrganization.ownerId,
+    owner_email: normalizedOrganization.ownerEmail,
+    created_at: normalizedOrganization.createdAt,
+    last_modified: normalizedOrganization.lastModified,
+    payload: normalizedOrganization,
+  };
+};
+
+const mapRowToOrganization = (row: Partial<OrganizationRow>): Organization => {
+  const payload = row.payload && typeof row.payload === "object"
+    ? (row.payload as Partial<Organization>)
+    : {};
+
+  return normalizeOrganization({
+    ...payload,
+    id: normalizeString(row.id) || payload.id,
+    name: normalizeString(row.name) || payload.name,
+    description: normalizeString(row.description) || payload.description,
+    plan: (row.plan as OrganizationPlan) || payload.plan,
+    ownerId: normalizeString(row.owner_id) || payload.ownerId,
+    ownerEmail: normalizeString(row.owner_email) || payload.ownerEmail,
+    createdAt:
+      typeof row.created_at === "number" ? row.created_at : payload.createdAt,
+    lastModified:
+      typeof row.last_modified === "number"
+        ? row.last_modified
+        : payload.lastModified,
+  });
+};
+
+const mergeRemoteOrganizationsIntoCache = (
+  remoteOrganizations: Organization[],
+): Organization[] => {
+  const organizationsById = new Map<string, Organization>();
+
+  getOrganizations().forEach((organization) => {
+    organizationsById.set(organization.id, organization);
+  });
+
+  remoteOrganizations.forEach((organization) => {
+    organizationsById.set(organization.id, organization);
+  });
+
+  const mergedOrganizations = Array.from(organizationsById.values());
+  saveOrganizations(mergedOrganizations);
+  return mergedOrganizations;
+};
+
+const persistOrganizationToSupabase = async (
+  organization: Organization,
+): Promise<Error | null> => {
+  if (!supabase) {
+    return null;
+  }
+
+  const { error } = await supabase
+    .from(SUPABASE_ORGANIZATIONS_TABLE)
+    .upsert(mapOrganizationToRow(organization), { onConflict: "id" });
+
+  if (!error) {
+    return null;
+  }
+
+  if (isSupabaseRelationMissingError(error)) {
+    console.error(
+      "Supabase table organizations is missing. Run the SQL migration before enabling organization persistence.",
+      error,
+    );
+  } else {
+    console.error("persistOrganizationToSupabase failed:", error);
+  }
+
+  return error;
+};
+
+const loadOrganizationsFromSupabase = async (
+  filters: {
+    orgId?: string;
+    ownerId?: string;
+  } = {},
+): Promise<Organization[] | null> => {
+  if (!supabase) {
+    return null;
+  }
+
+  let query = supabase.from(SUPABASE_ORGANIZATIONS_TABLE).select("*");
+
+  if (filters.orgId) {
+    query = query.eq("id", filters.orgId);
+  }
+
+  if (filters.ownerId) {
+    query = query.eq("owner_id", filters.ownerId);
+  }
+
+  const { data, error } = await query.order("last_modified", { ascending: false });
+
+  if (error) {
+    if (isSupabaseRelationMissingError(error)) {
+      console.error(
+        "Supabase table organizations is missing. Falling back to local organization cache.",
+        error,
+      );
+    } else {
+      console.error("loadOrganizationsFromSupabase failed:", error);
+    }
+
+    return null;
+  }
+
+  if (!Array.isArray(data)) {
+    return [];
+  }
+
+  return data.map((row) => mapRowToOrganization(row as Partial<OrganizationRow>));
+};
+
+/**
+ * 从 Supabase 按条件拉取组织并刷新本地缓存。
+ * @param filters 组织 ID 或 owner ID 过滤条件。
+ * @returns 远端可用时返回远端结果，否则回退到本地缓存。
+ */
+export const loadOrganizations = async (
+  filters: {
+    orgId?: string;
+    ownerId?: string;
+  } = {},
+): Promise<Organization[]> => {
+  const remoteOrganizations = await loadOrganizationsFromSupabase(filters);
+  if (!remoteOrganizations) {
+    return filterOrganizations(getOrganizations(), filters);
+  }
+
+  mergeRemoteOrganizationsIntoCache(remoteOrganizations);
+  return filterOrganizations(remoteOrganizations, filters);
+};
+
+/**
+ * 从 Supabase 或本地缓存中读取单个组织。
+ * @param orgId 组织唯一标识。
+ * @returns 命中的组织对象；未找到时返回 undefined。
+ */
+export const loadOrganization = async (
+  orgId: string,
+): Promise<Organization | undefined> => {
+  const organizations = await loadOrganizations({ orgId });
+  return organizations[0];
+};
+
+/**
+ * 从 Supabase 或本地缓存中读取指定 owner 的组织列表。
+ * @param ownerId 所有者用户 ID。
+ * @returns owner 名下的组织列表。
+ */
+export const loadOrganizationsByOwner = async (
+  ownerId: string,
+): Promise<Organization[]> => {
+  return loadOrganizations({ ownerId });
 };
 
 const findMemberIndex = (
@@ -476,9 +692,9 @@ export const getOrganizationsByOwner = (ownerId: string): Organization[] => {
  * @param input 组织基础信息。
  * @returns 新创建并已持久化的组织对象。
  */
-export const createOrganization = (
+export const createOrganization = async (
   input: CreateOrganizationInput,
-): Organization => {
+): Promise<Organization> => {
   const now = Date.now();
 
   const organization = normalizeOrganization({
@@ -505,6 +721,7 @@ export const createOrganization = (
   });
 
   upsertOrganization(organization);
+  await persistOrganizationToSupabase(organization);
   return organization;
 };
 
@@ -514,10 +731,10 @@ export const createOrganization = (
  * @param data 可编辑的组织字段。
  * @returns 更新后的组织；未找到时返回 null。
  */
-export const updateOrganization = (
+export const updateOrganization = async (
   orgId: string,
   data: UpdateOrganizationInput,
-): Organization | null => {
+): Promise<Organization | null> => {
   const organization = getOrganization(orgId);
   if (!organization) {
     return null;
@@ -532,6 +749,11 @@ export const updateOrganization = (
   });
 
   upsertOrganization(nextOrganization);
+  const persistenceError = await persistOrganizationToSupabase(nextOrganization);
+  if (persistenceError) {
+    throw persistenceError;
+  }
+
   return nextOrganization;
 };
 
@@ -541,10 +763,10 @@ export const updateOrganization = (
  * @param nextPlan 目标 Plan。
  * @returns 更新后的组织或错误信息。
  */
-export const changeOrganizationPlan = (
+export const changeOrganizationPlan = async (
   orgId: string,
   nextPlan: OrganizationPlan,
-): OrganizationMutationResult => {
+): Promise<OrganizationMutationResult> => {
   try {
     const organization = getOrganization(orgId);
     if (!organization) {
@@ -562,7 +784,7 @@ export const changeOrganizationPlan = (
       };
     }
 
-    const updatedOrganization = updateOrganization(orgId, { plan: nextPlan });
+    const updatedOrganization = await updateOrganization(orgId, { plan: nextPlan });
     if (!updatedOrganization) {
       return {
         organization: null,
@@ -589,10 +811,10 @@ export const changeOrganizationPlan = (
  * @param input 成员信息。
  * @returns 更新后的组织或错误。
  */
-export const addOrganizationMember = (
+export const addOrganizationMember = async (
   orgId: string,
   input: OrganizationMemberInput,
-): OrganizationMutationResult => {
+): Promise<OrganizationMutationResult> => {
   try {
     const organization = getOrganization(orgId);
     if (!organization) {
@@ -657,6 +879,14 @@ export const addOrganizationMember = (
     });
 
     upsertOrganization(nextOrganization);
+    const persistenceError = await persistOrganizationToSupabase(nextOrganization);
+    if (persistenceError) {
+      return {
+        organization: null,
+        error: persistenceError,
+      };
+    }
+
     return {
       organization: nextOrganization,
       error: null,
@@ -677,13 +907,13 @@ export const addOrganizationMember = (
  * @param data 允许更新的成员字段。
  * @returns 更新后的组织；未找到时返回 null。
  */
-export const updateOrganizationMember = (
+export const updateOrganizationMember = async (
   orgId: string,
   memberId: string,
   data: Partial<
     Pick<OrganizationMember, "email" | "name" | "title" | "role" | "status">
   >,
-): OrganizationMutationResult => {
+): Promise<OrganizationMutationResult> => {
   try {
     const organization = getOrganization(orgId);
     if (!organization) {
@@ -735,6 +965,14 @@ export const updateOrganizationMember = (
     });
 
     upsertOrganization(nextOrganization);
+    const persistenceError = await persistOrganizationToSupabase(nextOrganization);
+    if (persistenceError) {
+      return {
+        organization: null,
+        error: persistenceError,
+      };
+    }
+
     return {
       organization: nextOrganization,
       error: null,
@@ -754,18 +992,24 @@ export const updateOrganizationMember = (
  * @param memberId 成员唯一标识。
  * @returns 删除成功返回 true，否则返回 false。
  */
-export const removeOrganizationMember = (
+export const removeOrganizationMember = async (
   orgId: string,
   memberId: string,
-): boolean => {
+): Promise<OrganizationMutationResult> => {
   const organization = getOrganization(orgId);
   if (!organization) {
-    return false;
+    return {
+      organization: null,
+      error: new Error("Organization not found"),
+    };
   }
 
   const targetMember = organization.members.find((member) => member.id === memberId);
   if (!targetMember || isOwnerMemberIdentity(organization, targetMember)) {
-    return false;
+    return {
+      organization: null,
+      error: new Error("Member cannot be removed"),
+    };
   }
 
   const nextOrganization = normalizeOrganization({
@@ -775,7 +1019,18 @@ export const removeOrganizationMember = (
   });
 
   upsertOrganization(nextOrganization);
-  return true;
+  const persistenceError = await persistOrganizationToSupabase(nextOrganization);
+  if (persistenceError) {
+    return {
+      organization: null,
+      error: persistenceError,
+    };
+  }
+
+  return {
+    organization: nextOrganization,
+    error: null,
+  };
 };
 
 /**
@@ -784,7 +1039,7 @@ export const removeOrganizationMember = (
  * @param owner 当前 owner 的关键信息。
  * @returns 更新后的组织；未找到时返回 null。
  */
-export const syncOrganizationOwnerMember = (
+export const syncOrganizationOwnerMember = async (
   orgId: string,
   owner: {
     userId: string;
@@ -792,7 +1047,7 @@ export const syncOrganizationOwnerMember = (
     name?: string;
     title?: string;
   },
-): Organization | null => {
+): Promise<Organization | null> => {
   const organization = getOrganization(orgId);
   if (!organization) {
     return null;
@@ -839,6 +1094,7 @@ export const syncOrganizationOwnerMember = (
   });
 
   upsertOrganization(nextOrganization);
+  await persistOrganizationToSupabase(nextOrganization);
   return nextOrganization;
 };
 
@@ -848,11 +1104,11 @@ export const syncOrganizationOwnerMember = (
  * @param options owner 的补充信息以及默认组织名。
  * @returns 当前用户对应的默认组织。
  */
-export const getOrCreateDefaultOrganization = (
+export const getOrCreateDefaultOrganization = async (
   userId: string,
   options: DefaultOrganizationOptions = {},
-): Organization => {
-  const existingOrganization = getOrganizationsByOwner(userId)[0];
+): Promise<Organization> => {
+  const existingOrganization = (await loadOrganizationsByOwner(userId))[0];
   const preferredName = options.preferredName?.trim();
 
   if (existingOrganization) {
@@ -863,7 +1119,7 @@ export const getOrCreateDefaultOrganization = (
       (nextOrganization.name === DEFAULT_ORGANIZATION_NAME ||
         !nextOrganization.name.trim())
     ) {
-      const updated = updateOrganization(nextOrganization.id, {
+      const updated = await updateOrganization(nextOrganization.id, {
         name: preferredName,
       });
       if (updated) {
@@ -871,7 +1127,7 @@ export const getOrCreateDefaultOrganization = (
       }
     }
 
-    const syncedOrganization = syncOrganizationOwnerMember(nextOrganization.id, {
+    const syncedOrganization = await syncOrganizationOwnerMember(nextOrganization.id, {
       userId,
       email: options.ownerEmail || nextOrganization.ownerEmail,
       name: options.ownerName,
@@ -897,23 +1153,23 @@ export const getOrCreateDefaultOrganization = (
  * @param organizationId 当前组织 ID。
  * @returns 被补齐归属的专利数量。
  */
-export const associatePatentsWithUser = (
+export const associatePatentsWithUser = async (
   userId: string,
   organizationId: string,
-): number => {
+): Promise<number> => {
   const patents = getPatents();
   let count = 0;
 
-  patents.forEach((patent) => {
+  for (const patent of patents) {
     if (!patent.userId) {
       count += 1;
-      savePatentToStorage({
+      await savePatentToStorage({
         ...patent,
         userId,
         organizationId,
       });
     }
-  });
+  }
 
   return count;
 };

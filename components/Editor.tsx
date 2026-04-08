@@ -294,7 +294,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
       }
 
       applyWriteBackPatentData(nextPatentData, target);
-      savePatentToStorage(nextPatentData);
+      void savePatentToStorage(nextPatentData);
       setWriteBackNotice({ tone: 'success', message: successMessage });
   };
 
