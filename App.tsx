@@ -51,6 +51,28 @@ const App: React.FC = () => {
 
   const supabaseConfigured = isSupabaseConfigured();
 
+  // P0-1: Auto-save heartbeat mechanism (30s debounce)
+  useEffect(() => {
+    if (!patentData) {
+      return;
+    }
+
+    const autoSaveTimer = window.setTimeout(() => {
+      void (async () => {
+        const { error } = await savePatentToStorage(patentData);
+        if (error) {
+          console.warn('Auto-save failed (background):', error.message);
+        } else {
+          console.debug('Auto-saved patent draft:', patentData.id);
+        }
+      })();
+    }, 30000); // 30 seconds debounce
+
+    return () => {
+      window.clearTimeout(autoSaveTimer);
+    };
+  }, [patentData]);
+
   const clearAuthContext = () => {
     setIsAuthenticated(false);
     setCurrentUserId(null);

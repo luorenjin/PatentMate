@@ -177,6 +177,8 @@ const normalizePatentData = (patent: Partial<PatentData>): PatentData => {
     createdAt: typeof patent.createdAt === "number" ? patent.createdAt : now,
     lastModified:
       typeof patent.lastModified === "number" ? patent.lastModified : now,
+    version: typeof patent.version === "number" ? patent.version : 1,
+    deletedAt: patent.deletedAt ?? null,
     userId: normalizeString(patent.userId),
     organizationId: normalizeString(patent.organizationId),
     // New fields for Step 3-4
@@ -463,15 +465,24 @@ export const syncPatentsToSupabase = async (
 
 /**
  * 从 localStorage 读取并规范化所有专利项目数据。
+ * 默认过滤掉已软删除的项目。
+ * @param includeDeleted 是否包含已删除的项目（默认为 false）。
  * @returns 已兼容旧版本字段的专利数据列表；读取失败时返回空数组。
  */
-export const getPatents = (): PatentData[] => {
+export const getPatents = (includeDeleted = false): PatentData[] => {
   try {
     const data = localStorage.getItem(STORAGE_KEY);
     if (!data) return [];
 
     const parsed = JSON.parse(data) as Array<Partial<PatentData>>;
-    return Array.isArray(parsed) ? parsed.map(normalizePatentData) : [];
+    const normalized = Array.isArray(parsed) ? parsed.map(normalizePatentData) : [];
+
+    // Filter out soft-deleted patents by default
+    if (!includeDeleted) {
+      return normalized.filter(patent => !patent.deletedAt);
+    }
+
+    return normalized;
   } catch (e) {
     console.error("Failed to load patents", e);
     return [];
@@ -481,23 +492,30 @@ export const getPatents = (): PatentData[] => {
 /**
  * 根据项目 ID 获取单个专利数据。
  * @param id 项目唯一标识。
+ * @param includeDeleted 是否包含已删除的项目（默认为 true，单项查询时允许访问已删除数据）。
  * @returns 找到时返回规范化后的项目，否则返回 undefined。
  */
-export const getPatentById = (id: string): PatentData | undefined => {
-  const patents = getPatents();
+export const getPatentById = (id: string, includeDeleted = true): PatentData | undefined => {
+  const patents = getPatents(includeDeleted);
   return patents.find((p) => p.id === id);
 };
 
 /**
  * 将单个专利项目保存到本地缓存，并在可用时同步写入 Supabase。
+ * 包含冲突解决策略：最新写入优先 + 版本号递增。
  * @param patent 待保存的专利项目数据。
  */
 export const savePatentToStorage = async (
   patent: PatentData,
 ): Promise<{ patent: PatentData; error: Error | null }> => {
+  const existingPatent = getPatentById(patent.id);
+  const currentVersion = existingPatent?.version ?? 0;
+
+  // Conflict resolution: increment version on each save
   const updatedPatent = normalizePatentData({
     ...patent,
     lastModified: Date.now(),
+    version: currentVersion + 1,
   });
 
   upsertPatentInCache(updatedPatent);
@@ -510,11 +528,25 @@ export const savePatentToStorage = async (
 };
 
 /**
- * 删除指定 ID 的专利项目，并同步删除 Supabase 中的同名记录。
+ * 软删除指定 ID 的专利项目（标记为已删除，不立即清除数据）。
+ * 保留 30 天以供恢复，之后需手动清理。
  * @param id 项目唯一标识。
  */
 export const deletePatentFromStorage = async (id: string): Promise<Error | null> => {
-  removePatentFromCache(id);
+  const patent = getPatentById(id);
+  if (!patent) {
+    return new Error("Patent not found");
+  }
+
+  // Soft delete: mark as deleted instead of removing
+  const softDeletedPatent = normalizePatentData({
+    ...patent,
+    deletedAt: Date.now(),
+    lastModified: Date.now(),
+    version: (patent.version ?? 1) + 1,
+  });
+
+  upsertPatentInCache(softDeletedPatent);
 
   if (!supabase) {
     return null;
@@ -522,7 +554,11 @@ export const deletePatentFromStorage = async (id: string): Promise<Error | null>
 
   const { error } = await supabase
     .from(SUPABASE_PATENTS_TABLE)
-    .delete()
+    .update({
+      deleted_at: softDeletedPatent.deletedAt,
+      last_modified: softDeletedPatent.lastModified,
+      payload: softDeletedPatent,
+    })
     .eq("id", id);
 
   if (!error) {
@@ -539,6 +575,98 @@ export const deletePatentFromStorage = async (id: string): Promise<Error | null>
   }
 
   return error;
+};
+
+/**
+ * 恢复已软删除的专利项目。
+ * @param id 项目唯一标识。
+ */
+export const restorePatentFromStorage = async (id: string): Promise<Error | null> => {
+  const patent = getPatentById(id);
+  if (!patent) {
+    return new Error("Patent not found");
+  }
+
+  if (!patent.deletedAt) {
+    return new Error("Patent is not deleted");
+  }
+
+  // Restore: clear deletedAt timestamp
+  const restoredPatent = normalizePatentData({
+    ...patent,
+    deletedAt: null,
+    lastModified: Date.now(),
+    version: (patent.version ?? 1) + 1,
+  });
+
+  upsertPatentInCache(restoredPatent);
+
+  if (!supabase) {
+    return null;
+  }
+
+  const { error } = await supabase
+    .from(SUPABASE_PATENTS_TABLE)
+    .update({
+      deleted_at: null,
+      last_modified: restoredPatent.lastModified,
+      payload: restoredPatent,
+    })
+    .eq("id", id);
+
+  if (!error) {
+    return null;
+  }
+
+  if (isSupabaseRelationMissingError(error)) {
+    console.error(
+      "Supabase table patent_projects is missing. Run the SQL migration before enabling cloud persistence.",
+      error,
+    );
+  } else {
+    console.error("restorePatentFromStorage failed:", error);
+  }
+
+  return error;
+};
+
+/**
+ * 永久删除已软删除超过指定天数的专利项目（清理旧数据）。
+ * @param daysOld 软删除后保留的天数，默认 30 天。
+ * @returns 成功清理的项目数量。
+ */
+export const purgeOldDeletedPatents = async (daysOld = 30): Promise<number> => {
+  const cutoffTime = Date.now() - daysOld * 24 * 60 * 60 * 1000;
+  const allPatents = getPatents(true); // Include deleted
+  const toPurge = allPatents.filter(
+    patent => patent.deletedAt && patent.deletedAt < cutoffTime
+  );
+
+  if (toPurge.length === 0) {
+    return 0;
+  }
+
+  // Remove from local cache
+  const remainingPatents = allPatents.filter(
+    patent => !patent.deletedAt || patent.deletedAt >= cutoffTime
+  );
+  writePatentsToCache(remainingPatents);
+
+  // Remove from Supabase
+  if (supabase) {
+    for (const patent of toPurge) {
+      const { error } = await supabase
+        .from(SUPABASE_PATENTS_TABLE)
+        .delete()
+        .eq("id", patent.id);
+
+      if (error) {
+        console.error(`Failed to purge patent ${patent.id} from Supabase:`, error);
+      }
+    }
+  }
+
+  return toPurge.length;
 };
 
 /**

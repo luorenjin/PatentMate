@@ -124,6 +124,10 @@ export interface PatentData {
   lastModified: number;
   createdAt: number;
 
+  // Data persistence enhancement (P0-1)
+  version?: number;          // 版本号，用于冲突检测
+  deletedAt?: number | null; // 软删除时间戳，null 表示未删除
+
   // User association
   userId?: string;
   organizationId?: string;
