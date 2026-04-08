@@ -7,6 +7,7 @@ import { renderMarkdown } from '../services/markdownService';
 import { RichTextEditor } from './RichTextEditor';
 import { exportToDocx, exportToPdf, downloadBlob } from '../services/exportService';
 import { savePatentToStorage } from '../services/storageService';
+import { checkTerminologyConsistency, fixProhibitedTerms, type TerminologyReport } from '../services/terminologyChecker';
 
 interface EditorProps {
   patentData: PatentData;
@@ -153,6 +154,10 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
 
   // Validation State
   const [validationIssues, setValidationIssues] = useState<{ section: string; issue: string; severity: 'error' | 'warning' | 'info' }[]>([]);
+
+  // Terminology Checking State
+  const [terminologyReport, setTerminologyReport] = useState<TerminologyReport | null>(null);
+  const [showTerminologyPanel, setShowTerminologyPanel] = useState(false);
 
   // Export State
   const [isExporting, setIsExporting] = useState(false);
@@ -348,6 +353,27 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
   useEffect(() => {
       validatePatent();
   }, [patentData.abstract, patentData.claims, patentData.backgroundArt, patentData.inventionContent, patentData.detailedDescription]);
+
+  // Check terminology consistency
+  const handleCheckTerminology = () => {
+    const report = checkTerminologyConsistency(patentData);
+    setTerminologyReport(report);
+    setShowTerminologyPanel(true);
+  };
+
+  // Auto-fix prohibited terms in selected section
+  const handleAutoFixProhibitedTerms = () => {
+    const currentContent = patentData[selectedSection];
+    if (typeof currentContent !== 'string' || !currentContent) return;
+
+    const plainText = htmlToPlainText(currentContent);
+    const fixedText = fixProhibitedTerms(plainText);
+    const fixedHtml = renderMarkdown(fixedText);
+    updatePatentData(selectedSection, fixedHtml);
+
+    // Re-check terminology
+    handleCheckTerminology();
+  };
 
   // Paragraph selection handlers
   const handleParagraphSelect = (index: number, event: React.MouseEvent) => {
@@ -975,11 +1001,22 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                     {processingType === 'fix_legal' ? '法言法语处理中...' : '法言法语'}
                     </button>
 
+                    <button
+                    onClick={handleCheckTerminology}
+                    className="w-full py-2.5 px-4 rounded-lg bg-purple-50 text-purple-600 hover:bg-purple-100 border border-purple-100 flex items-center gap-2 transition-all text-sm"
+                    >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                    </svg>
+                    术语一致性检查
+                    </button>
+
                     <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs leading-5 text-slate-500">
                         <p>当前章节：<span className="font-semibold text-slate-700">{getSectionLabel(selectedSection)}</span></p>
                         <p>语言润色：保留技术事实和结构，只优化行文与术语。</p>
                         <p>智能扩充：结合现有交底补足披露细节，不虚构数据。</p>
                         <p>法言法语：改写为更符合中国专利申请习惯的正式表述。</p>
+                        <p>术语检查：识别核心术语、不一致和禁用词。</p>
                     </div>
                 </div>
             </div>
@@ -1084,6 +1121,127 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
                     )}
                 </div>
             </div>
+
+            {/* Terminology Consistency Panel */}
+            {showTerminologyPanel && terminologyReport && (
+                <div className="bg-white rounded-xl shadow-sm border border-purple-200 p-4 shrink-0">
+                    <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                            <svg className="w-4 h-4 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                            </svg>
+                            术语一致性
+                        </h3>
+                        <button
+                            onClick={() => setShowTerminologyPanel(false)}
+                            className="text-slate-400 hover:text-slate-700"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                    </div>
+
+                    <div className="text-xs text-slate-600 mb-3 p-2 bg-slate-50 rounded border border-slate-100">
+                        {terminologyReport.summary}
+                    </div>
+
+                    {/* Prohibited Terms Section */}
+                    {terminologyReport.prohibitedTerms.length > 0 && (
+                        <div className="mb-3">
+                            <div className="flex items-center justify-between mb-2">
+                                <h4 className="text-xs font-bold text-red-700 flex items-center gap-1">
+                                    <span>🚫</span> 禁用词 ({terminologyReport.prohibitedTerms.length})
+                                </h4>
+                                <button
+                                    onClick={handleAutoFixProhibitedTerms}
+                                    className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded hover:bg-red-200 font-medium"
+                                >
+                                    一键修正
+                                </button>
+                            </div>
+                            <div className="space-y-2 max-h-48 overflow-y-auto">
+                                {terminologyReport.prohibitedTerms.slice(0, 5).map((prohibited, idx) => (
+                                    <div key={idx} className="text-xs p-2 bg-red-50 border border-red-100 rounded">
+                                        <div className="font-semibold text-red-800 mb-1">
+                                            "{prohibited.term}" - {prohibited.sectionName}
+                                        </div>
+                                        <div className="text-red-600 text-[11px] mb-1">{prohibited.context}</div>
+                                        <div className="text-red-700 text-[11px]">
+                                            <span className="font-semibold">原因：</span>{prohibited.reason}
+                                        </div>
+                                        <div className="text-red-700 text-[11px]">
+                                            <span className="font-semibold">建议：</span>{prohibited.suggestion}
+                                        </div>
+                                    </div>
+                                ))}
+                                {terminologyReport.prohibitedTerms.length > 5 && (
+                                    <div className="text-xs text-slate-500 text-center py-1">
+                                        还有 {terminologyReport.prohibitedTerms.length - 5} 处禁用词...
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Inconsistencies Section */}
+                    {terminologyReport.inconsistencies.length > 0 && (
+                        <div className="mb-3">
+                            <h4 className="text-xs font-bold text-amber-700 mb-2 flex items-center gap-1">
+                                <span>⚠️</span> 术语不一致 ({terminologyReport.inconsistencies.length})
+                            </h4>
+                            <div className="space-y-2 max-h-40 overflow-y-auto">
+                                {terminologyReport.inconsistencies.slice(0, 3).map((inconsistency, idx) => (
+                                    <div key={idx} className="text-xs p-2 bg-amber-50 border border-amber-100 rounded">
+                                        <div className="font-semibold text-amber-800 mb-1">
+                                            "{inconsistency.baseForm}" 有变体
+                                        </div>
+                                        <div className="text-amber-700 text-[11px] mb-1">
+                                            变体：{inconsistency.variants.join('、')}
+                                        </div>
+                                        <div className="text-amber-700 text-[11px]">
+                                            {inconsistency.suggestion}
+                                        </div>
+                                    </div>
+                                ))}
+                                {terminologyReport.inconsistencies.length > 3 && (
+                                    <div className="text-xs text-slate-500 text-center py-1">
+                                        还有 {terminologyReport.inconsistencies.length - 3} 处不一致...
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Core Terms Section */}
+                    {terminologyReport.coreTerms.length > 0 && (
+                        <div>
+                            <h4 className="text-xs font-bold text-blue-700 mb-2 flex items-center gap-1">
+                                <span>📌</span> 核心术语 (Top {Math.min(5, terminologyReport.coreTerms.length)})
+                            </h4>
+                            <div className="space-y-1.5">
+                                {terminologyReport.coreTerms.slice(0, 5).map((term, idx) => (
+                                    <div key={idx} className="text-xs p-2 bg-blue-50 border border-blue-100 rounded flex justify-between items-center">
+                                        <span className="font-semibold text-blue-800">{term.term}</span>
+                                        <span className="text-blue-600 text-[11px]">×{term.totalCount}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {terminologyReport.prohibitedTerms.length === 0 &&
+                     terminologyReport.inconsistencies.length === 0 &&
+                     terminologyReport.coreTerms.length === 0 && (
+                        <div className="text-xs text-green-600 flex items-center gap-1 p-2 bg-green-50 rounded">
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                            术语使用规范，未发现问题
+                        </div>
+                    )}
+                </div>
+            )}
 
             {/* Review Panel */}
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 shrink-0 flex flex-col gap-2">
