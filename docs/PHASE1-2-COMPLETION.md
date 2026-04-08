@@ -4,7 +4,7 @@
 
 **执行时间**: 2026-04-08
 **执行范围**: Phase 1 核心质量提升 + Phase 2 用户体验优化
-**总体完成度**: Phase 1: 85% | Phase 2: 90%
+**总体完成度**: Phase 1: 85% | Phase 2: 100%
 
 ---
 
@@ -239,15 +239,64 @@ getDiagramTypeDescription(type: DiagramType): string
 
 ---
 
-### ⏳ 3.5 Editor 术语检查 UI (0% - 未实施)
+### ✅ 3.5 Editor 术语检查 UI (100%)
 
-**计划内容** (待后续实现):
-- 在 Editor 中集成 terminologyChecker
-- 显示术语一致性报告
-- 高亮显示禁用词
-- 提供一键修正功能
+**实现内容**:
+- ✅ 在 Editor 左侧栏集成术语一致性检查按钮
+- ✅ 术语检查面板显示完整报告
+- ✅ 禁用词高亮显示（红色标注，显示原因和建议）
+- ✅ 一键修正禁用词功能
+- ✅ 术语不一致提示（黄色标注，显示变体和统一建议）
+- ✅ 核心术语列表（蓝色标注，显示频次）
 
-**原因**: 服务层已完成，UI 集成可在后续版本快速实现
+**UI 组件**:
+```typescript
+// Editor.tsx 新增状态
+const [terminologyReport, setTerminologyReport] = useState<TerminologyReport | null>(null);
+const [showTerminologyPanel, setShowTerminologyPanel] = useState(false);
+
+// 检查函数
+const handleCheckTerminology = () => {
+  const report = checkTerminologyConsistency(patentData);
+  setTerminologyReport(report);
+  setShowTerminologyPanel(true);
+};
+
+// 自动修正函数
+const handleAutoFixProhibitedTerms = () => {
+  const plainText = htmlToPlainText(currentContent);
+  const fixedText = fixProhibitedTerms(plainText);
+  const fixedHtml = renderMarkdown(fixedText);
+  updatePatentData(selectedSection, fixedHtml);
+  handleCheckTerminology(); // 重新检查
+};
+```
+
+**视觉效果**:
+```
+┌─────────────────────────────────┐
+│ 📋 术语一致性检查                 │
+│ ─────────────────────────────── │
+│ 共识别 8 个核心术语，发现 2 处   │
+│ 可能的术语不一致，检出 3 处禁用词 │
+│                                  │
+│ 🚫 禁用词 (3)    [一键修正]      │
+│ ├─ "最佳" - 权利要求书            │
+│ │  原因：使用绝对化评价            │
+│ │  建议：改为"优选地"              │
+│ └─ "完全解决" - 发明内容          │
+│                                  │
+│ ⚠️ 术语不一致 (2)                │
+│ ├─ "数据库" 有变体                │
+│ │  变体：数据库系统、DB             │
+│ │  建议：统一使用"数据库"           │
+│                                  │
+│ 📌 核心术语 (Top 5)               │
+│ ├─ 用户界面          ×12          │
+│ ├─ 数据处理模块      ×8           │
+│ └─ 机器学习算法      ×6           │
+└─────────────────────────────────┘
+```
 
 ---
 
@@ -267,7 +316,7 @@ services/
 
 components/
 ├── NoveltySearch.tsx          [增强] 评分细分 UI
-├── Editor.tsx                 [增强] 审查问题分类显示
+├── Editor.tsx                 [增强] 审查问题分类显示 + 术语检查 UI
 └── Drafting/
     └── DrawingsGenerator.tsx  [重构] 图表生成器
 
