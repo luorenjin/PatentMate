@@ -644,9 +644,28 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
       if (fixedIssueIndices.includes(index)) return;
 
       if (window.confirm(`确定要应用 AI 对【${getSectionLabel(issue.section)}】章节的修改建议吗？这将覆盖当前该章节的内容。`)) {
+          // Clean the suggestion by removing instructional preamble
+          let cleanedSuggestion = issue.suggestion;
+
+          // Remove common instructional patterns before actual content
+          // Pattern 1: "补充...示例：" or "修改...示例："
+          const exampleMatch = cleanedSuggestion.match(/示例[：:]\s*\n?(.+)/s);
+          if (exampleMatch) {
+              cleanedSuggestion = exampleMatch[1].trim();
+          }
+
+          // Pattern 2: Remove instructional text at the beginning (ends with period, colon or newline before actual content)
+          // Match text like "补充标准背景技术章节，明确现有技术的缺陷及本发明的技术贡献..."
+          const instructionalPattern = /^[^【\n]*?[。：:]\s*\n?(.+)/s;
+          const instructionalMatch = cleanedSuggestion.match(instructionalPattern);
+          if (instructionalMatch && cleanedSuggestion.includes('【')) {
+              // Only apply this pattern if the content includes section markers like 【背景技术】
+              cleanedSuggestion = instructionalMatch[1].trim();
+          }
+
           // The suggestion from AI is usually Markdown/text. Format it.
-          const htmlSuggestion = renderMarkdown(issue.suggestion);
-          
+          const htmlSuggestion = renderMarkdown(cleanedSuggestion);
+
           updatePatentData(issue.section, htmlSuggestion);
           setSelectedSection(issue.section);
           setFixedIssueIndices(prev => [...prev, index]);

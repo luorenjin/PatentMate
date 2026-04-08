@@ -1344,6 +1344,8 @@ export const runFinalPatentReview = async (
 
       请仔细找出草稿中的具体问题，并为每个问题提供修改后的建议文本（重写相关章节）。
 
+      **重要：suggestion 字段必须直接包含可以替换到对应章节的完整内容，不要添加任何说明性文字、前缀或"示例："等标记。**
+
       请返回JSON格式结果，格式如下：
       {
         "score": number, // 0-100分。只有 > 80 分才算合格。
@@ -1355,7 +1357,7 @@ export const runFinalPatentReview = async (
              "severity": "critical" | "major" | "minor", // 严重程度
              "category": "新颖性" | "创造性" | "公开充分" | "格式规范" | "权利要求" | "术语一致性", // 问题类别
              "issue": "具体问题的详细描述",
-             "suggestion": "针对该章节的完整重写建议内容（Fix）"
+             "suggestion": "针对该章节的完整重写建议内容（直接以【章节名】开头的正文内容，不要包含任何指导性说明）"
            }
         ]
       }
