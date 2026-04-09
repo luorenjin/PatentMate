@@ -83,6 +83,12 @@ const isSupabaseColumnMissingError = (
   return columnName ? message.includes(columnName) : true;
 };
 
+const createSupabaseMutationMissError = (
+  action: "save" | "delete" | "restore",
+): Error => {
+  return new Error(`Patent ${action} did not match any remote rows`);
+};
+
 const normalizeStringArray = (value: unknown): string[] => {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string");
@@ -288,7 +294,7 @@ const writePatentsToCache = (patents: PatentData[]): void => {
 };
 
 const upsertPatentInCache = (patent: PatentData): PatentData[] => {
-  const patents = getPatents();
+  const patents = getPatents(true);
   const index = patents.findIndex((item) => item.id === patent.id);
 
   if (index >= 0) {
@@ -302,7 +308,7 @@ const upsertPatentInCache = (patent: PatentData): PatentData[] => {
 };
 
 const removePatentFromCache = (id: string): PatentData[] => {
-  const patents = getPatents().filter((patent) => patent.id !== id);
+  const patents = getPatents(true).filter((patent) => patent.id !== id);
   writePatentsToCache(patents);
   return patents;
 };
@@ -414,6 +420,7 @@ const persistPatentToSupabase = async (patent: PatentData): Promise<Error | null
 
 const syncPatentPayloadToSupabase = async (
   patent: PatentData,
+  action: "delete" | "restore",
 ): Promise<Error | null> => {
   if (!supabase) {
     return null;
@@ -425,28 +432,38 @@ const syncPatentPayloadToSupabase = async (
     payload: patent,
   };
 
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from(SUPABASE_PATENTS_TABLE)
     .update(primaryPayload)
-    .eq("id", patent.id);
+    .eq("id", patent.id)
+    .select("id");
+
+  if (!error && Array.isArray(data) && data.length > 0) {
+    return null;
+  }
 
   if (!error) {
-    return null;
+    return createSupabaseMutationMissError(action);
   }
 
   if (!isSupabaseColumnMissingError(error, "deleted_at")) {
     return error;
   }
 
-  const { error: fallbackError } = await supabase
+  const { data: fallbackData, error: fallbackError } = await supabase
     .from(SUPABASE_PATENTS_TABLE)
     .update({
       last_modified: patent.lastModified,
       payload: patent,
     })
-    .eq("id", patent.id);
+    .eq("id", patent.id)
+    .select("id");
 
-  return fallbackError ?? null;
+  if (!fallbackError && Array.isArray(fallbackData) && fallbackData.length > 0) {
+    return null;
+  }
+
+  return fallbackError ?? createSupabaseMutationMissError(action);
 };
 
 const loadPatentsFromSupabase = async (
@@ -585,6 +602,14 @@ export const savePatentToStorage = async (
   patent: PatentData,
 ): Promise<{ patent: PatentData; error: Error | null }> => {
   const existingPatent = getPatentById(patent.id);
+
+  if (existingPatent?.deletedAt && !patent.deletedAt) {
+    return {
+      patent: existingPatent,
+      error: new Error("Patent has been deleted and cannot be saved"),
+    };
+  }
+
   const currentVersion = existingPatent?.version ?? 0;
 
   // Conflict resolution: increment version on each save
@@ -628,7 +653,7 @@ export const deletePatentFromStorage = async (id: string): Promise<Error | null>
     return null;
   }
 
-  const error = await syncPatentPayloadToSupabase(softDeletedPatent);
+  const error = await syncPatentPayloadToSupabase(softDeletedPatent, "delete");
 
   if (!error) {
     return null;
@@ -674,7 +699,7 @@ export const restorePatentFromStorage = async (id: string): Promise<Error | null
     return null;
   }
 
-  const error = await syncPatentPayloadToSupabase(restoredPatent);
+  const error = await syncPatentPayloadToSupabase(restoredPatent, "restore");
 
   if (!error) {
     return null;

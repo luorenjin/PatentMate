@@ -284,6 +284,14 @@ export const translateAuthErrorMessage = (message: string): string => {
     return "项目缺少用户归属，暂时无法同步到数据库，请重新登录后重试";
   }
 
+  if (normalizedMessage.includes("Patent has been deleted and cannot be saved")) {
+    return "该项目已删除，普通保存不会再把它恢复回来；如需继续使用，请先恢复项目";
+  }
+
+  if (normalizedMessage.includes("did not match any remote rows")) {
+    return "远程数据库中没有命中该项目，或当前账号无权修改它；请检查项目归属与 RLS 策略";
+  }
+
   if (normalizedMessage.includes("Member cannot be removed")) {
     return "该成员无法移除，请确认不是当前组织所有者";
   }

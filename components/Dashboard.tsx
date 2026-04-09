@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { PatentData, PatentStatus, DraftingStage } from '../types';
 import { loadPatents, deletePatentFromStorage } from '../services/storageService';
+import { translateAuthErrorMessage } from '../services/supabaseService';
 import { BusinessStageKey, getPatentBusinessStageKey, getPatentJourneyMeta } from '../workflow';
 
 // Maps drafting stage keys to display labels
@@ -44,6 +45,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 }) => {
     const [patents, setPatents] = useState<PatentData[]>([]);
     const [deleteCandidateId, setDeleteCandidateId] = useState<string | null>(null);
+    const [deleteError, setDeleteError] = useState<string | null>(null);
     const [activeFilter, setActiveFilter] = useState<'all' | BusinessStageKey>('all');
 
     // Search, filter, and sort state
@@ -253,8 +255,12 @@ const Dashboard: React.FC<DashboardProps> = ({
     const confirmDelete = () => {
         if (deleteCandidateId) {
             void (async () => {
-                await deletePatentFromStorage(deleteCandidateId);
+                setDeleteError(null);
+                const error = await deletePatentFromStorage(deleteCandidateId);
                 await loadPatentItems();
+                if (error) {
+                    setDeleteError(translateAuthErrorMessage(error.message));
+                }
                 setDeleteCandidateId(null);
             })();
         }
@@ -301,6 +307,21 @@ const Dashboard: React.FC<DashboardProps> = ({
                     </button>
                 ))}
             </section>
+
+            {deleteError && (
+                <section className="mb-6 rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">
+                    <div className="flex items-start justify-between gap-4">
+                        <span>{deleteError}</span>
+                        <button
+                            type="button"
+                            onClick={() => setDeleteError(null)}
+                            className="text-xs font-medium opacity-70 hover:opacity-100"
+                        >
+                            关闭
+                        </button>
+                    </div>
+                </section>
+            )}
 
             {/* Search, Status Filter, and Sort */}
             <section className="mb-6 flex flex-wrap gap-3 items-center">
