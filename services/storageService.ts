@@ -39,6 +39,11 @@ interface PatentProjectRow {
   payload: PatentData;
 }
 
+interface PatentScopeFilters {
+  userId?: string | null;
+  organizationId?: string | null;
+}
+
 const normalizeString = (value: unknown): string => {
   return typeof value === "string" ? value : "";
 };
@@ -55,6 +60,27 @@ const isSupabaseRelationMissingError = (
     /relation .* does not exist/i.test(error.message ?? "") ||
     /Could not find the table/i.test(error.message ?? "")
   );
+};
+
+const isSupabaseColumnMissingError = (
+  error: { code?: string; message?: string } | null | undefined,
+  columnName?: string,
+): boolean => {
+  if (!error) {
+    return false;
+  }
+
+  const message = error.message ?? "";
+  const missingColumn =
+    error.code === "42703" ||
+    /column .* does not exist/i.test(message) ||
+    /Could not find the .* column/i.test(message);
+
+  if (!missingColumn) {
+    return false;
+  }
+
+  return columnName ? message.includes(columnName) : true;
 };
 
 const normalizeStringArray = (value: unknown): string[] => {
@@ -227,24 +253,30 @@ const normalizePatentData = (patent: Partial<PatentData>): PatentData => {
   };
 };
 
+const matchesPatentScope = (
+  patent: PatentData,
+  filters: PatentScopeFilters = {},
+): boolean => {
+  if (filters.organizationId) {
+    return patent.organizationId === filters.organizationId;
+  }
+
+  if (filters.userId) {
+    return patent.userId === filters.userId;
+  }
+
+  return true;
+};
+
 const filterPatentsByScope = (
   patents: PatentData[],
-  filters: {
-    userId?: string | null;
-    organizationId?: string | null;
-  } = {},
+  filters: PatentScopeFilters = {},
 ): PatentData[] => {
-  return patents.filter((patent) => {
-    if (filters.organizationId) {
-      return patent.organizationId === filters.organizationId;
-    }
+  return patents.filter((patent) => matchesPatentScope(patent, filters));
+};
 
-    if (filters.userId) {
-      return patent.userId === filters.userId;
-    }
-
-    return true;
-  });
+const filterActivePatents = (patents: PatentData[]): PatentData[] => {
+  return patents.filter((patent) => !patent.deletedAt);
 };
 
 const sortPatentsByModified = (patents: PatentData[]): PatentData[] => {
@@ -323,11 +355,22 @@ const mapRowToPatent = (row: Partial<PatentProjectRow>): PatentData => {
   });
 };
 
-const mergeRemotePatentsIntoCache = (remotePatents: PatentData[]): PatentData[] => {
+const mergeRemotePatentsIntoCache = (
+  remotePatents: PatentData[],
+  filters: PatentScopeFilters = {},
+): PatentData[] => {
+  const remotePatentIds = new Set(remotePatents.map((patent) => patent.id));
   const nextPatentsById = new Map<string, PatentData>();
 
-  getPatents().forEach((patent) => {
-    nextPatentsById.set(patent.id, patent);
+  getPatents(true).forEach((patent) => {
+    const shouldKeepPatent =
+      !matchesPatentScope(patent, filters) ||
+      Boolean(patent.deletedAt) ||
+      remotePatentIds.has(patent.id);
+
+    if (shouldKeepPatent) {
+      nextPatentsById.set(patent.id, patent);
+    }
   });
 
   remotePatents.forEach((patent) => {
@@ -369,11 +412,45 @@ const persistPatentToSupabase = async (patent: PatentData): Promise<Error | null
   return error;
 };
 
+const syncPatentPayloadToSupabase = async (
+  patent: PatentData,
+): Promise<Error | null> => {
+  if (!supabase) {
+    return null;
+  }
+
+  const primaryPayload = {
+    deleted_at: patent.deletedAt ?? null,
+    last_modified: patent.lastModified,
+    payload: patent,
+  };
+
+  const { error } = await supabase
+    .from(SUPABASE_PATENTS_TABLE)
+    .update(primaryPayload)
+    .eq("id", patent.id);
+
+  if (!error) {
+    return null;
+  }
+
+  if (!isSupabaseColumnMissingError(error, "deleted_at")) {
+    return error;
+  }
+
+  const { error: fallbackError } = await supabase
+    .from(SUPABASE_PATENTS_TABLE)
+    .update({
+      last_modified: patent.lastModified,
+      payload: patent,
+    })
+    .eq("id", patent.id);
+
+  return fallbackError ?? null;
+};
+
 const loadPatentsFromSupabase = async (
-  filters: {
-    userId?: string | null;
-    organizationId?: string | null;
-  } = {},
+  filters: PatentScopeFilters = {},
 ): Promise<PatentData[] | null> => {
   if (!supabase) {
     return null;
@@ -406,7 +483,9 @@ const loadPatentsFromSupabase = async (
     return [];
   }
 
-  return data.map((row) => mapRowToPatent(row as Partial<PatentProjectRow>));
+  return filterActivePatents(
+    data.map((row) => mapRowToPatent(row as Partial<PatentProjectRow>)),
+  );
 };
 
 /**
@@ -415,17 +494,14 @@ const loadPatentsFromSupabase = async (
  * @returns 远端可用时返回远端项目，否则回退到本地缓存结果。
  */
 export const loadPatents = async (
-  filters: {
-    userId?: string | null;
-    organizationId?: string | null;
-  } = {},
+  filters: PatentScopeFilters = {},
 ): Promise<PatentData[]> => {
   const remotePatents = await loadPatentsFromSupabase(filters);
   if (!remotePatents) {
     return sortPatentsByModified(filterPatentsByScope(getPatents(), filters));
   }
 
-  mergeRemotePatentsIntoCache(remotePatents);
+  mergeRemotePatentsIntoCache(remotePatents, filters);
   return sortPatentsByModified(filterPatentsByScope(remotePatents, filters));
 };
 
@@ -552,14 +628,7 @@ export const deletePatentFromStorage = async (id: string): Promise<Error | null>
     return null;
   }
 
-  const { error } = await supabase
-    .from(SUPABASE_PATENTS_TABLE)
-    .update({
-      deleted_at: softDeletedPatent.deletedAt,
-      last_modified: softDeletedPatent.lastModified,
-      payload: softDeletedPatent,
-    })
-    .eq("id", id);
+  const error = await syncPatentPayloadToSupabase(softDeletedPatent);
 
   if (!error) {
     return null;
@@ -605,14 +674,7 @@ export const restorePatentFromStorage = async (id: string): Promise<Error | null
     return null;
   }
 
-  const { error } = await supabase
-    .from(SUPABASE_PATENTS_TABLE)
-    .update({
-      deleted_at: null,
-      last_modified: restoredPatent.lastModified,
-      payload: restoredPatent,
-    })
-    .eq("id", id);
+  const error = await syncPatentPayloadToSupabase(restoredPatent);
 
   if (!error) {
     return null;
