@@ -18,6 +18,39 @@ export interface AuthNotice {
   message: string;
 }
 
+// P1-1: User Quota Management
+export type SubscriptionPlan = "free" | "basic" | "pro" | "enterprise";
+
+export interface PlanLimits {
+  monthlyQuota: number;  // AI calls per month, -1 = unlimited
+  features: string[];
+}
+
+export interface QuotaConfig {
+  userId: string;
+  organizationId?: string;
+  plan: SubscriptionPlan;
+  monthlyQuota: number;     // Total quota for the month
+  currentUsage: number;     // Used quota this period
+  resetDate: number;        // Timestamp when quota resets
+  createdAt: number;
+  lastModified: number;
+}
+
+export interface QuotaUsage {
+  used: number;
+  remaining: number;
+  total: number;
+  percentage: number;       // 0-100
+  resetDate: number;
+}
+
+export interface QuotaCheckResult {
+  allowed: boolean;
+  remaining: number;
+  message?: string;
+}
+
 export type PatentStatus =
   | "disclosure_collecting"
   | "disclosure_review"

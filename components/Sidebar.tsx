@@ -7,19 +7,24 @@ import {
   getWorkflowStageState,
   getWorkflowStageStatusLabel,
 } from '../workflow';
+import QuotaIndicator from './QuotaIndicator';
 
 interface SidebarProps {
   currentView: AppView;
   setView: (view: AppView) => void;
   patentData: PatentData | null;
+  userId?: string; // P1-1: User ID for quota display
   onSignOut?: () => void;
+  onUpgrade?: () => void; // P1-1: Upgrade subscription callback
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
   currentView,
   setView,
   patentData,
-  onSignOut
+  userId,
+  onSignOut,
+  onUpgrade,
 }) => {
   const hasActivePatent = Boolean(patentData);
   const currentStage = getCurrentWorkflowStage(patentData);
@@ -120,7 +125,14 @@ const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </nav>
 
-      <div className="p-4 border-t border-slate-700 space-y-2">
+      <div className="p-4 border-t border-slate-700 space-y-3">
+        {/* P1-1: Quota indicator */}
+        {userId && (
+          <div className="mb-2">
+            <QuotaIndicator userId={userId} compact onUpgrade={onUpgrade} />
+          </div>
+        )}
+
         <button
           onClick={() => setView(AppView.SETTINGS)}
           className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${

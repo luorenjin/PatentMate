@@ -9,6 +9,7 @@ import type {
   TechnicalDisclosureSummary,
 } from "../types";
 import { captureError, monitorAICall, addBreadcrumb } from "./sentryService";
+import { checkQuota, incrementUsage } from "./quotaService";
 
 const PROVIDER_GEMINI = "gemini";
 const PROVIDER_QWEN = "qwen";
@@ -215,6 +216,7 @@ export const generateText = async (
     systemInstruction?: string;
     useGoogleSearch?: boolean;
     jsonMode?: boolean;
+    userId?: string; // P1-1: Add userId for quota checking
   },
 ): Promise<{
   text: string;
@@ -222,6 +224,24 @@ export const generateText = async (
 }> => {
   return monitorAICall(`generateText_${level}`, async () => {
     try {
+      // P1-1: Check quota before AI call
+      if (options?.userId) {
+        const quotaCheck = await checkQuota(options.userId);
+        if (!quotaCheck.allowed) {
+          const error = new Error(quotaCheck.message || "配额不足");
+          captureError(error, {
+            operation: 'generateText',
+            userId: options.userId,
+            quotaRemaining: quotaCheck.remaining,
+          });
+          addBreadcrumb('ai.quota_exceeded', quotaCheck.message || "配额不足", 'warning');
+          return {
+            text: "",
+            groundingLinks: [],
+          };
+        }
+      }
+
       addBreadcrumb('ai.request', `generateText (${level}, ${prompt.length} chars)`, 'info');
 
       const model = getTextModel(level);
@@ -266,6 +286,12 @@ export const generateText = async (
           : [];
 
         addBreadcrumb('ai.response', `generateText completed (${response.text?.length || 0} chars)`, 'info');
+
+        // P1-1: Increment usage after successful call
+        if (options?.userId && response.text) {
+          void incrementUsage(options.userId, 1);
+        }
+
         return {
           text: response.text || "",
           groundingLinks,
@@ -285,6 +311,12 @@ export const generateText = async (
       );
 
       addBreadcrumb('ai.response', `generateText completed (${text?.length || 0} chars)`, 'info');
+
+      // P1-1: Increment usage after successful call
+      if (options?.userId && text) {
+        void incrementUsage(options.userId, 1);
+      }
+
       return { text, groundingLinks: [] };
     } catch (error) {
       captureError(error as Error, { operation: 'generateText', level, provider: useGemini() ? 'gemini' : 'qwen' });
