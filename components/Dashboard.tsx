@@ -46,6 +46,8 @@ const Dashboard: React.FC<DashboardProps> = ({
     const [patents, setPatents] = useState<PatentData[]>([]);
     const [deleteCandidateId, setDeleteCandidateId] = useState<string | null>(null);
     const [deleteError, setDeleteError] = useState<string | null>(null);
+    const [loadError, setLoadError] = useState<string | null>(null);
+    const [isLoadingPatents, setIsLoadingPatents] = useState(true);
     const [activeFilter, setActiveFilter] = useState<'all' | BusinessStageKey>('all');
 
     // Search, filter, and sort state
@@ -53,14 +55,18 @@ const Dashboard: React.FC<DashboardProps> = ({
     const [milestoneFilter, setMilestoneFilter] = useState<'all' | PatentStatus>('all');
     const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'title-asc' | 'title-desc' | 'milestone'>('date-desc');
 
+    const getConfirmedDraftingStageCount = (patent: PatentData) => {
+        return DRAFTING_STAGES.filter(
+            (stage) => patent.draftingProgress?.[stage]?.isConfirmed === true,
+        ).length;
+    };
+
     const getBlockers = (patent: PatentData) => {
         const blockers: string[] = [];
         const stageKey = getPatentBusinessStageKey(patent.status);
 
         if (stageKey === 'drafting') {
-            const confirmedCount = patent.draftingProgress
-                ? DRAFTING_STAGES.filter((stage) => patent.draftingProgress?.[stage].isConfirmed).length
-                : 0;
+            const confirmedCount = getConfirmedDraftingStageCount(patent);
 
             if (confirmedCount === 0) {
                 blockers.push('尚未确认任何申请章节');
@@ -140,9 +146,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         }
 
         if (stageKey === 'drafting') {
-            const confirmedCount = patent.draftingProgress
-                ? DRAFTING_STAGES.filter((stage) => patent.draftingProgress?.[stage].isConfirmed).length
-                : 0;
+            const confirmedCount = getConfirmedDraftingStageCount(patent);
             const currentStageLabel = patent.draftingProgress?.currentStage
                 ? STAGE_LABELS[patent.draftingProgress.currentStage]
                 : '待启动';
@@ -236,11 +240,22 @@ const Dashboard: React.FC<DashboardProps> = ({
     );
 
     const loadPatentItems = async () => {
-        const data = await loadPatents({
-            userId: currentUserId,
-            organizationId: currentOrganizationId,
-        });
-        setPatents(data);
+        setIsLoadingPatents(true);
+        setLoadError(null);
+
+        try {
+            const data = await loadPatents({
+                userId: currentUserId,
+                organizationId: currentOrganizationId,
+            });
+            setPatents(data);
+        } catch (error) {
+            console.error('Dashboard loadPatentItems failed:', error);
+            setPatents([]);
+            setLoadError('项目列表加载失败，请稍后重试。');
+        } finally {
+            setIsLoadingPatents(false);
+        }
     };
 
     useEffect(() => {
@@ -318,6 +333,21 @@ const Dashboard: React.FC<DashboardProps> = ({
                             className="text-xs font-medium opacity-70 hover:opacity-100"
                         >
                             关闭
+                        </button>
+                    </div>
+                </section>
+            )}
+
+            {loadError && (
+                <section className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-800">
+                    <div className="flex items-start justify-between gap-4">
+                        <span>{loadError}</span>
+                        <button
+                            type="button"
+                            onClick={() => void loadPatentItems()}
+                            className="text-xs font-medium opacity-70 hover:opacity-100"
+                        >
+                            重试
                         </button>
                     </div>
                 </section>
@@ -514,7 +544,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 
                 {filteredAndSortedPatents.length === 0 && (
                     <div className="md:col-span-2 lg:col-span-3 rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-slate-500">
-                        当前筛选条件下没有项目。
+                        {isLoadingPatents ? '正在加载项目...' : '当前筛选条件下没有项目。'}
                     </div>
                 )}
             </div>

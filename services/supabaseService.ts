@@ -10,6 +10,10 @@ import { generateUuid } from "./idService";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+const AUTH_REDIRECT_ORIGIN =
+  import.meta.env.VITE_AUTH_REDIRECT_ORIGIN ||
+  import.meta.env.VITE_APP_ORIGIN ||
+  "";
 const MOCK_USERS_KEY = "patentmate_mock_auth_users";
 const MOCK_SESSION_KEY = "patentmate_mock_auth_session";
 const EMAIL_PROVIDER = "email";
@@ -46,6 +50,8 @@ const KNOWN_AUTH_HASH_PARAMS = new Set([
 const authStateListeners = new Set<
   (event: string, session: Session | null) => void
 >();
+const PRIVATE_IPV4_HOST_PATTERN =
+  /^(10\.(?:\d{1,3}\.){2}\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})$/;
 
 export interface AuthCallbackResult {
   session: Session | null;
@@ -138,10 +144,39 @@ const createAuthNotice = (
   return { tone, message };
 };
 
+const isPrivateIpv4Host = (value: string): boolean => {
+  return PRIVATE_IPV4_HOST_PATTERN.test(value);
+};
+
+const resolveAuthRedirectOrigin = (): string => {
+  const configuredOrigin = AUTH_REDIRECT_ORIGIN.trim();
+  if (configuredOrigin) {
+    try {
+      return new URL(configuredOrigin).origin;
+    } catch (error) {
+      console.warn(
+        "VITE_AUTH_REDIRECT_ORIGIN is invalid. Falling back to browser origin.",
+        error,
+      );
+    }
+  }
+
+  const browserUrl = new URL(window.location.href);
+  if (
+    import.meta.env.DEV &&
+    (browserUrl.hostname === "0.0.0.0" || isPrivateIpv4Host(browserUrl.hostname))
+  ) {
+    browserUrl.hostname = "localhost";
+  }
+
+  return browserUrl.origin;
+};
+
 const buildAuthRedirectUrl = (
   action: typeof AUTH_ACTION_CONFIRM | typeof AUTH_ACTION_RECOVERY,
 ): string => {
-  const url = new URL(window.location.href);
+  const currentUrl = new URL(window.location.href);
+  const url = new URL(`${resolveAuthRedirectOrigin()}${currentUrl.pathname}`);
   url.hash = "";
   url.search = "";
   url.searchParams.set(AUTH_ACTION_QUERY_KEY, action);

@@ -6,6 +6,7 @@ import {
   PatentData,
   PatentType,
   PatentStatus,
+  StageData,
   TechnicalField,
 } from "../types";
 import { generateUuid } from "./idService";
@@ -25,6 +26,13 @@ const TECHNICAL_FIELDS: readonly TechnicalField[] = [
   "生物",
   "材料",
 ];
+const DRAFTING_STAGES = [
+  "abstract",
+  "claims",
+  "description",
+  "embodiment",
+  "drawings",
+] as const;
 
 interface PatentProjectRow {
   id: string;
@@ -149,47 +157,67 @@ const normalizeSelectedTechnicalField = (
     : undefined;
 };
 
+const createEmptyDraftingStageData = (): StageData => {
+  return {
+    content: "",
+    previousVersion: undefined,
+    generatedAt: undefined,
+    isConfirmed: false,
+  };
+};
+
+const normalizeDraftingStageData = (value: unknown): StageData => {
+  if (!value || typeof value !== "object") {
+    return createEmptyDraftingStageData();
+  }
+
+  const stageData = value as Record<string, unknown>;
+
+  return {
+    content: typeof stageData.content === "string" ? stageData.content : "",
+    previousVersion:
+      typeof stageData.previousVersion === "string"
+        ? stageData.previousVersion
+        : undefined,
+    generatedAt:
+      typeof stageData.generatedAt === "number"
+        ? stageData.generatedAt
+        : undefined,
+    isConfirmed: stageData.isConfirmed === true,
+  };
+};
+
+const normalizeDraftingCurrentStage = (
+  value: unknown,
+): DraftingProgress["currentStage"] => {
+  return DRAFTING_STAGES.includes(value as DraftingProgress["currentStage"])
+    ? (value as DraftingProgress["currentStage"])
+    : "abstract";
+};
+
 const normalizeDraftingProgress = (
   value: unknown,
 ): DraftingProgress | undefined => {
   if (!value || typeof value !== "object") return undefined;
   const progress = value as Record<string, unknown>;
-  const stages = [
-    "abstract",
-    "claims",
-    "description",
-    "embodiment",
-    "drawings",
-  ] as const;
 
-  const result: Partial<DraftingProgress> = {};
+  const hasCurrentStage = typeof progress.currentStage === "string";
+  const hasAnyStageData = DRAFTING_STAGES.some(
+    (stage) => progress[stage] && typeof progress[stage] === "object",
+  );
 
-  for (const stage of stages) {
-    if (progress[stage] && typeof progress[stage] === "object") {
-      const stageData = progress[stage] as Record<string, unknown>;
-      result[stage] = {
-        content: typeof stageData.content === "string" ? stageData.content : "",
-        previousVersion:
-          typeof stageData.previousVersion === "string"
-            ? stageData.previousVersion
-            : undefined,
-        generatedAt:
-          typeof stageData.generatedAt === "number"
-            ? stageData.generatedAt
-            : undefined,
-        isConfirmed: stageData.isConfirmed === true,
-      };
-    }
+  if (!hasCurrentStage && !hasAnyStageData) {
+    return undefined;
   }
 
-  if (progress.currentStage && typeof progress.currentStage === "string") {
-    result.currentStage =
-      progress.currentStage as DraftingProgress["currentStage"];
-  }
-
-  return Object.keys(result).length > 0
-    ? (result as DraftingProgress)
-    : undefined;
+  return {
+    abstract: normalizeDraftingStageData(progress.abstract),
+    claims: normalizeDraftingStageData(progress.claims),
+    description: normalizeDraftingStageData(progress.description),
+    embodiment: normalizeDraftingStageData(progress.embodiment),
+    drawings: normalizeDraftingStageData(progress.drawings),
+    currentStage: normalizeDraftingCurrentStage(progress.currentStage),
+  };
 };
 
 const normalizePatentData = (patent: Partial<PatentData>): PatentData => {
