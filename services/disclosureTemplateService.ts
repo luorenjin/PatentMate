@@ -4,7 +4,50 @@
  * 按技术领域动态生成深度交底问卷，包含领域特定问题和量化证据要求。
  */
 
-import { PatentType, TechnicalField, TemplateQuestion } from '../types';
+import type {
+  DisclosureData,
+  PatentData,
+  PatentType,
+  TechnicalField,
+  TemplateQuestion,
+} from '../types';
+
+const INVENTION_BASE_QUESTION_IDS = new Set(['q1', 'q2', 'q3', 'q4']);
+const EVIDENCE_QUESTION_PREFIX = 'q_evidence';
+const ADVANTAGE_QUESTION_KEYWORDS = /效果|性能|测试|可靠性|成本|收率|准确率|效率|活性|安全|临床/;
+const ALTERNATIVE_STATEMENT_KEYWORDS = /替代|替换|可替换|可选|备选|变体|改用|另一实施例|另一种实现|优选方案/;
+
+const splitAnswerItems = (answer: string): string[] =>
+  answer
+    .split(/\r?\n+/)
+    .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.、)）])\s*/, '').trim())
+    .filter(Boolean);
+
+const dedupeList = (items: string[]): string[] => {
+  const seen = new Set<string>();
+
+  return items.filter((item) => {
+    const normalized = item.trim();
+
+    if (!normalized) {
+      return false;
+    }
+
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+};
+
+const extractAlternativeStatements = (answer: string): string[] =>
+  answer
+    .split(/[\r\n；;。]+/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0 && ALTERNATIVE_STATEMENT_KEYWORDS.test(item));
 
 /**
  * 生成技术领域特定的深度问卷
@@ -26,6 +69,113 @@ export const generateDeepQuestionnaire = (
   const evidenceQuestions = getEvidenceQuestions(technicalField);
 
   return [...baseQuestions, ...fieldSpecificQuestions, ...evidenceQuestions];
+};
+
+/**
+ * 将交底问卷答案映射为专利主数据中的结构化字段。
+ * @param disclosureData 技术交底问卷数据
+ * @returns 供 PatentData 合并写入的结构化交底字段
+ */
+export const buildDisclosurePatentFields = (
+  disclosureData: DisclosureData
+): Pick<
+  PatentData,
+  | 'disclosureNotes'
+  | 'technicalProblem'
+  | 'existingSolutionIssues'
+  | 'disclosureSummary'
+  | 'technicalHighlights'
+  | 'embodiments'
+  | 'advantages'
+  | 'alternativeSolutions'
+  | 'evidenceMaterials'
+> => {
+  const questions = generateDeepQuestionnaire(disclosureData.type, disclosureData.field);
+  const questionMap = new Map(questions.map((question) => [question.id, question]));
+  const answerMap = disclosureData.answers.reduce<Record<string, string>>((accumulator, item) => {
+    if (item.answer.trim()) {
+      accumulator[item.questionId] = item.answer;
+    }
+
+    return accumulator;
+  }, {});
+  const getAnswer = (questionId: string): string => answerMap[questionId] || '';
+
+  const disclosureNotes = [
+    ...questions
+      .map((question) => {
+        const answer = getAnswer(question.id);
+
+        if (!answer.trim()) {
+          return '';
+        }
+
+        return `【问题】: ${question.question}\n【回答】: \n${answer}`;
+      })
+      .filter(Boolean),
+    ...disclosureData.answers
+      .filter((item) => item.answer.trim() && !questionMap.has(item.questionId))
+      .map((item) => `【问题】: ${item.questionId}\n【回答】: \n${item.answer}`),
+  ].join('\n\n');
+
+  if (disclosureData.type === 'utility') {
+    const structureDescription = getAnswer('q4');
+
+    return {
+      disclosureNotes,
+      technicalProblem: [getAnswer('q1'), getAnswer('q3')].filter(Boolean).join('\n\n'),
+      existingSolutionIssues: getAnswer('q2'),
+      disclosureSummary: structureDescription,
+      technicalHighlights: [],
+      embodiments: dedupeList(splitAnswerItems(structureDescription)),
+      advantages: dedupeList(splitAnswerItems(getAnswer('q5'))),
+      alternativeSolutions: dedupeList(
+        disclosureData.answers.flatMap((item) => extractAlternativeStatements(item.answer))
+      ),
+      evidenceMaterials: [],
+    };
+  }
+
+  const fieldSpecificQuestions = questions.filter(
+    (question) =>
+      !INVENTION_BASE_QUESTION_IDS.has(question.id) &&
+      !question.id.startsWith(EVIDENCE_QUESTION_PREFIX)
+  );
+  const evidenceQuestions = questions.filter((question) =>
+    question.id.startsWith(EVIDENCE_QUESTION_PREFIX)
+  );
+  const evidenceMaterials = dedupeList(
+    evidenceQuestions.flatMap((question) => splitAnswerItems(getAnswer(question.id)))
+  );
+  const embodiments = dedupeList(
+    [getAnswer('q3'), ...fieldSpecificQuestions.map((question) => getAnswer(question.id))].flatMap(
+      splitAnswerItems
+    )
+  );
+  const advantages = dedupeList([
+    ...questions
+      .filter(
+        (question) =>
+          !question.id.startsWith(EVIDENCE_QUESTION_PREFIX) &&
+          ADVANTAGE_QUESTION_KEYWORDS.test(question.question)
+      )
+      .flatMap((question) => splitAnswerItems(getAnswer(question.id))),
+    ...evidenceMaterials,
+  ]);
+
+  return {
+    disclosureNotes,
+    technicalProblem: getAnswer('q1'),
+    existingSolutionIssues: getAnswer('q2'),
+    disclosureSummary: getAnswer('q3'),
+    technicalHighlights: dedupeList(splitAnswerItems(getAnswer('q4'))),
+    embodiments,
+    advantages,
+    alternativeSolutions: dedupeList(
+      disclosureData.answers.flatMap((item) => extractAlternativeStatements(item.answer))
+    ),
+    evidenceMaterials,
+  };
 };
 
 /**

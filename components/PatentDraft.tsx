@@ -4,6 +4,7 @@ import TypeSelection from './Disclosure/TypeSelection';
 import FieldSelection from './Disclosure/FieldSelection';
 import QuestionWizard from './Disclosure/QuestionWizard';
 import DisclosureSummary from './Disclosure/DisclosureSummary';
+import { buildDisclosurePatentFields } from '../services/disclosureTemplateService';
 import { savePatentToStorage } from '../services/storageService';
 import { getWorkflowStageMeta } from '../workflow';
 
@@ -87,45 +88,12 @@ const PatentDraft: React.FC<PatentDraftProps> = ({
   };
 
   const handleSummaryConfirm = () => {
-    const questionsText = disclosureData.answers.map(a => `【问题】: ${a.questionId}\n【回答】:\n${a.answer}`).join('\n\n');
-    let updates: Partial<PatentData> = {
+    const completedAt = Date.now();
+    const updates: Partial<PatentData> = {
       status: 'disclosure_review',
-      disclosureNotes: questionsText,
-      technicalProblem: '',
-      existingSolutionIssues: '',
-      disclosureSummary: '',
-      technicalHighlights: [],
-      embodiments: [],
-      advantages: [],
-      alternativeSolutions: []
+      disclosureData: { ...disclosureData, completedAt },
+      ...buildDisclosurePatentFields(disclosureData),
     };
-
-    const getAns = (id: string) => disclosureData.answers.find(a => a.questionId === id)?.answer || '';
-
-    if (disclosureData.type === 'invention') {
-      updates.technicalProblem = getAns('q1');
-      updates.existingSolutionIssues = getAns('q2');
-      updates.disclosureSummary = getAns('q3'); // 技术解决方案
-      
-      const q4 = getAns('q4');
-      if (q4.trim()) updates.technicalHighlights = q4.split('\n').filter(Boolean);
-      
-      const q5 = getAns('q5');
-      if (q5.trim()) updates.embodiments = q5.split('\n').filter(Boolean);
-      
-      const q6 = getAns('q6');
-      if (q6.trim()) updates.advantages = q6.split('\n').filter(Boolean);
-      
-      const q7 = getAns('q7');
-      if (q7.trim()) updates.alternativeSolutions = q7.split('\n').filter(Boolean);
-    } else {
-      updates.technicalProblem = getAns('q1') + '\n\n' + getAns('q3');
-      updates.existingSolutionIssues = getAns('q2');
-      updates.disclosureSummary = getAns('q4'); // 产品结构描述
-      
-      const q5 = getAns('q5');
-      if (q5.trim()) updates.advantages = q5.split('\n').filter(Boolean);
-    }
 
     // Apply all updates to parent state
     Object.entries(updates).forEach(([k, v]) => {
@@ -136,7 +104,7 @@ const PatentDraft: React.FC<PatentDraftProps> = ({
     const updatedPatent = {
       ...patentData,
       ...updates,
-      lastModified: Date.now()
+      lastModified: completedAt
     } as PatentData;
     void savePatentToStorage(updatedPatent);
     

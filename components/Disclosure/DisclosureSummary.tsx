@@ -1,5 +1,6 @@
-import React from 'react';
-import { DisclosureData, TemplateQuestion } from '../../types';
+import React, { useMemo } from 'react';
+import { generateDeepQuestionnaire } from '../../services/disclosureTemplateService';
+import { DisclosureData } from '../../types';
 
 interface DisclosureSummaryProps {
   disclosureData: DisclosureData;
@@ -7,39 +8,25 @@ interface DisclosureSummaryProps {
   onEdit: () => void;
 }
 
-// Template questions (same as in QuestionWizard)
-const inventionQuestions: TemplateQuestion[] = [
-  { id: 'q1', question: '发明目的', helpText: '', exampleAnswer: '' },
-  { id: 'q2', question: '背景技术', helpText: '', exampleAnswer: '' },
-  { id: 'q3', question: '技术方案', helpText: '', exampleAnswer: '' },
-  { id: 'q4', question: '核心创新点', helpText: '', exampleAnswer: '' },
-  { id: 'q5', question: '具体实施方式', helpText: '', exampleAnswer: '' },
-  { id: 'q6', question: '技术效果', helpText: '', exampleAnswer: '' },
-  { id: 'q7', question: '替代方案', helpText: '', exampleAnswer: '' },
-];
-
-const utilityQuestions: TemplateQuestion[] = [
-  { id: 'q1', question: '待解决问题', helpText: '', exampleAnswer: '' },
-  { id: 'q2', question: '现有产品结构', helpText: '', exampleAnswer: '' },
-  { id: 'q3', question: '发明目的', helpText: '', exampleAnswer: '' },
-  { id: 'q4', question: '产品结构描述', helpText: '', exampleAnswer: '' },
-  { id: 'q5', question: '技术效果', helpText: '', exampleAnswer: '' },
-];
-
 const DisclosureSummary: React.FC<DisclosureSummaryProps> = ({
   disclosureData,
   onConfirm,
   onEdit,
 }) => {
-  const questions =
-    disclosureData.type === 'invention' ? inventionQuestions : utilityQuestions;
+  const questions = useMemo(
+    () => generateDeepQuestionnaire(disclosureData.type, disclosureData.field),
+    [disclosureData.field, disclosureData.type]
+  );
+  const answerMap = useMemo(
+    () => new Map(disclosureData.answers.map((item) => [item.questionId, item.answer])),
+    [disclosureData.answers]
+  );
 
   const getAnswer = (questionId: string): string => {
-    const answer = disclosureData.answers.find((a) => a.questionId === questionId);
-    return answer?.answer || '';
+    return answerMap.get(questionId) || '';
   };
 
-  const answeredCount = disclosureData.answers.filter((a) => a.answer.trim().length > 0).length;
+  const answeredCount = questions.filter((question) => getAnswer(question.id).trim().length > 0).length;
   const totalQuestions = questions.length;
 
   return (
