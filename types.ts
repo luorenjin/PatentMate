@@ -18,12 +18,44 @@ export interface AuthNotice {
   message: string;
 }
 
+export type SubscriptionBillingInterval = "month" | "year" | "custom";
+
+export interface PlanResourceDefinition {
+  key: string;
+  label: string;
+  description: string;
+  unit: string;
+  limit: number | null;
+  limitLabel?: string;
+  usageMetric: string;
+}
+
+export interface SubscriptionPlanDefinition {
+  key: SubscriptionPlan;
+  label: string;
+  priceLabel: string;
+  priceAmount: number | null;
+  currency: string;
+  billingInterval: SubscriptionBillingInterval;
+  subtitle: string;
+  description: string;
+  badge: string;
+  features: string[];
+  resources: PlanResourceDefinition[];
+  allowedRoles: string[];
+  sortOrder: number;
+  isActive: boolean;
+}
+
 // P1-1: User Quota Management
 export type SubscriptionPlan = "free" | "basic" | "pro" | "enterprise";
 
 export interface PlanLimits {
   monthlyQuota: number;  // AI calls per month, -1 = unlimited
   features: string[];
+  resources?: PlanResourceDefinition[];
+  label?: string;
+  priceLabel?: string;
 }
 
 export interface QuotaConfig {
@@ -98,6 +130,7 @@ export interface DisclosureData {
   type: PatentType;
   field: TechnicalField;
   title: string;
+  userId?: string;
   answers: DisclosureAnswer[];
   completedAt?: number;
 }

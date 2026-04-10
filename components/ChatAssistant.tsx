@@ -7,9 +7,10 @@ interface ChatAssistantProps {
   onToggle: () => void;
   currentView: AppView;
   patentData: PatentData | null;
+  userId?: string;
 }
 
-const ChatAssistant: React.FC<ChatAssistantProps> = ({ isOpen, onToggle, currentView, patentData }) => {
+const ChatAssistant: React.FC<ChatAssistantProps> = ({ isOpen, onToggle, currentView, patentData, userId }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'model', text: '您好，我是您的专利工作流助手。您可以让我帮助梳理交底、评估方案、优化撰写内容，或解释当前阶段该做什么。', timestamp: Date.now() }
   ]);
@@ -43,7 +44,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ isOpen, onToggle, current
     : `当前阶段：${stageLabel}`;
 
   useEffect(() => {
-    chatSessionRef.current = createChatSession({ contextPrompt });
+    chatSessionRef.current = createChatSession({ contextPrompt, userId });
     setMessages([
       {
         role: 'model',
@@ -55,7 +56,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ isOpen, onToggle, current
         timestamp: Date.now(),
       },
     ]);
-  }, [contextPrompt, currentView]);
+  }, [contextPrompt, currentView, userId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });

@@ -63,7 +63,11 @@ export interface ChatSession {
   sendMessage: (input: { message: string }) => Promise<ChatSessionResponse>;
 }
 
-interface ChatSessionOptions {
+interface AIRequestOptions {
+  userId?: string;
+}
+
+interface ChatSessionOptions extends AIRequestOptions {
   contextPrompt?: string;
 }
 
@@ -105,6 +109,7 @@ export interface RefineTextOptions {
   inventionContent?: string;
   descriptionOfDrawings?: string;
   claimStrategy?: string;
+  userId?: string;
 }
 
 const REFINE_ACTION_LABELS: Record<RefineTextAction, string> = {
@@ -207,6 +212,25 @@ const requestQwenChat = async (
     console.error("requestQwenChat failed:", error);
     return "";
   }
+};
+
+const getQuotaExceededMessage = async (
+  userId?: string,
+): Promise<string | null> => {
+  if (!userId) {
+    return null;
+  }
+
+  const quotaCheck = await checkQuota(userId);
+  if (quotaCheck.allowed) {
+    return null;
+  }
+
+  const message =
+    quotaCheck.message ||
+    "您本月的 AI 调用配额已用完，请升级订阅计划后继续使用。";
+  addBreadcrumb("ai.quota_exceeded", message, "warning");
+  return message;
 };
 
 export const generateText = async (
@@ -462,6 +486,7 @@ const buildRefineContextLines = (options?: RefineTextOptions): string[] => {
 export const performNoveltySearch = async (
   title: string,
   description: string,
+  options?: AIRequestOptions,
 ): Promise<NoveltyReport> => {
   const prompt = `
     作为一位资深的中国专利审查员，请对以下发明创意进行新颖性检索和评估。
@@ -500,6 +525,7 @@ export const performNoveltySearch = async (
   try {
     const { text, groundingLinks } = await generateText(prompt, "fast", {
       useGoogleSearch: useGemini(),
+      userId: options?.userId,
     });
 
     if (!text) {
@@ -612,6 +638,7 @@ export const performNoveltySearch = async (
 export const optimizeInventionContent = async (
   currentContent: string,
   analysis: string,
+  options?: AIRequestOptions,
 ): Promise<string> => {
   const prompt = `
     你是一位专业的专利工程师和技术专家。
@@ -632,7 +659,9 @@ export const optimizeInventionContent = async (
   `;
 
   try {
-    const { text } = await generateText(prompt, "pro");
+    const { text } = await generateText(prompt, "pro", {
+      userId: options?.userId,
+    });
     return text || currentContent;
   } catch (error) {
     console.error("Optimization failed:", error);
@@ -644,7 +673,10 @@ export const optimizeInventionContent = async (
  * Generates a plausible invention technical content based on the title.
  * "I'm feeling lucky" feature.
  */
-export const generateInventionIdea = async (title: string): Promise<string> => {
+export const generateInventionIdea = async (
+  title: string,
+  options?: AIRequestOptions,
+): Promise<string> => {
   const prompt = `
     假设你是一位极具创造力的资深技术专家和发明家。
     请根据专利名称“${title}”，构思一个**具有突出的实质性特点和显著进步**的创新技术方案。
@@ -666,7 +698,9 @@ export const generateInventionIdea = async (title: string): Promise<string> => {
   `;
 
   try {
-    const { text } = await generateText(prompt, "pro");
+    const { text } = await generateText(prompt, "pro", {
+      userId: options?.userId,
+    });
     return text || "";
   } catch (error) {
     console.error("Failed to generate invention idea:", error);
@@ -681,6 +715,7 @@ export const generateInventionIdea = async (title: string): Promise<string> => {
 export const analyzePatentBasics = async (
   title: string,
   inventionContent: string,
+  options?: AIRequestOptions,
 ): Promise<{ technicalField: string; backgroundArt: string }> => {
   const prompt = `
     基于以下发明信息：
@@ -700,7 +735,10 @@ export const analyzePatentBasics = async (
   `;
 
   try {
-    const { text } = await generateText(prompt, "fast", { jsonMode: true });
+    const { text } = await generateText(prompt, "fast", {
+      jsonMode: true,
+      userId: options?.userId,
+    });
     const jsonString = extractJsonObject(text);
     const result = JSON.parse(jsonString) as {
       technicalField?: string;
@@ -727,6 +765,7 @@ export const analyzePatentBasics = async (
 export const summarizeTechnicalDisclosure = async (
   title: string,
   notes: string,
+  options?: AIRequestOptions,
 ): Promise<TechnicalDisclosureSummary> => {
   const fallback: TechnicalDisclosureSummary = {
     summary: "",
@@ -767,7 +806,10 @@ export const summarizeTechnicalDisclosure = async (
   `;
 
   try {
-    const { text } = await generateText(prompt, "pro", { jsonMode: true });
+    const { text } = await generateText(prompt, "pro", {
+      jsonMode: true,
+      userId: options?.userId,
+    });
     const jsonString = extractJsonObject(text);
     const result = JSON.parse(jsonString) as TechnicalDisclosureSummary;
 
@@ -882,7 +924,10 @@ export const runDisclosureInterviewTurn = async (
   `;
 
   try {
-    const { text } = await generateText(prompt, "pro", { jsonMode: true });
+    const { text } = await generateText(prompt, "pro", {
+      jsonMode: true,
+      userId: patentData.userId,
+    });
     const jsonString = extractJsonObject(text);
     const result = JSON.parse(jsonString) as DisclosureInterviewResult;
 
@@ -988,7 +1033,10 @@ export const generateClaimStrategyPackage = async (
   `;
 
   try {
-    const { text } = await generateText(prompt, "pro", { jsonMode: true });
+    const { text } = await generateText(prompt, "pro", {
+      jsonMode: true,
+      userId: patentData.userId,
+    });
     const jsonString = extractJsonObject(text);
     const result = JSON.parse(jsonString) as ClaimStrategyPackage;
 
@@ -1076,7 +1124,9 @@ export const generatePatentSection = async (
   `;
 
   try {
-    const { text } = await generateText(prompt, "pro");
+    const { text } = await generateText(prompt, "pro", {
+      userId: patentData.userId,
+    });
     return text || "";
   } catch (error) {
     console.error(`Failed to generate section ${sectionName}:`, error);
@@ -1293,6 +1343,7 @@ export const refineText = async (
   try {
     const { text: generated } = await generateText(prompt, "pro", {
       systemInstruction: REFINE_TEXT_SYSTEM_INSTRUCTION,
+      userId: options?.userId,
     });
     return generated || text;
   } catch (error) {
@@ -1326,8 +1377,21 @@ export const createChatSession = (
         message: string;
       }): Promise<ChatSessionResponse> => {
         try {
+          const quotaExceededMessage = await getQuotaExceededMessage(
+            options?.userId,
+          );
+          if (quotaExceededMessage) {
+            return { text: quotaExceededMessage };
+          }
+
           const response = await geminiChat.sendMessage({ message });
-          return { text: response.text || "" };
+          const text = response.text || "";
+
+          if (options?.userId && text) {
+            void incrementUsage(options.userId, 1);
+          }
+
+          return { text };
         } catch (error) {
           console.error("Gemini chat failed:", error);
           return { text: "抱歉，我现在无法回答，请稍后再试。" };
@@ -1347,9 +1411,21 @@ export const createChatSession = (
       message: string;
     }): Promise<ChatSessionResponse> => {
       try {
+        const quotaExceededMessage = await getQuotaExceededMessage(
+          options?.userId,
+        );
+        if (quotaExceededMessage) {
+          return { text: quotaExceededMessage };
+        }
+
         qwenHistory.push({ role: "user", content: message });
         const text = await requestQwenChat(qwenHistory, getTextModel("pro"));
         const answer = text || "抱歉，我现在无法回答，请稍后再试。";
+
+        if (options?.userId && text) {
+          void incrementUsage(options.userId, 1);
+        }
+
         qwenHistory.push({ role: "assistant", content: answer });
         return { text: answer };
       } catch (error) {
@@ -1407,7 +1483,10 @@ export const runFinalPatentReview = async (
     `;
 
   try {
-    const { text } = await generateText(prompt, "pro", { jsonMode: true });
+    const { text } = await generateText(prompt, "pro", {
+      jsonMode: true,
+      userId: patentData.userId,
+    });
     const jsonString = extractJsonObject(text);
     const result = JSON.parse(jsonString) as ReviewResult;
 
@@ -1474,7 +1553,9 @@ export const generateAbstract = async (
   `;
 
   try {
-    const { text } = await generateText(prompt, "fast");
+    const { text } = await generateText(prompt, "fast", {
+      userId: disclosureData.userId,
+    });
     return text || "";
   } catch (error) {
     console.error("generateAbstract failed:", error);
@@ -1526,7 +1607,10 @@ export const generateClaims = async (
   `;
 
   try {
-    const { text } = await generateText(prompt, "pro", { jsonMode: true });
+    const { text } = await generateText(prompt, "pro", {
+      jsonMode: true,
+      userId: disclosureData.userId,
+    });
     const jsonString = extractJsonObject(text);
     const result = JSON.parse(jsonString) as {
       independentClaims?: string[];
@@ -1600,7 +1684,9 @@ export const generateDescription = async (
   `;
 
   try {
-    const { text } = await generateText(prompt, "pro");
+    const { text } = await generateText(prompt, "pro", {
+      userId: disclosureData.userId,
+    });
     return text || "";
   } catch (error) {
     console.error("generateDescription failed:", error);
@@ -1655,7 +1741,10 @@ export const generateEmbodiments = async (
   `;
 
   try {
-    const { text } = await generateText(prompt, "fast", { jsonMode: true });
+    const { text } = await generateText(prompt, "fast", {
+      jsonMode: true,
+      userId: disclosureData.userId,
+    });
     const jsonString = extractJsonObject(text);
     const result = JSON.parse(jsonString) as {
       embodiments?: Array<{
@@ -1701,6 +1790,7 @@ export const generateEmbodiments = async (
  */
 export const generateDrawingsDescription = async (
   embodimentsJson: string,
+  options?: AIRequestOptions,
 ): Promise<string> => {
   let embodiments: Array<{ title?: string; description?: string }> = [];
   try {
@@ -1729,7 +1819,9 @@ export const generateDrawingsDescription = async (
   `;
 
   try {
-    const { text } = await generateText(prompt, "fast");
+    const { text } = await generateText(prompt, "fast", {
+      userId: options?.userId,
+    });
     return text || "";
   } catch (error) {
     console.error("generateDrawingsDescription failed:", error);
@@ -1746,6 +1838,7 @@ export const generateMermaidDiagrams = async (
   inventionContent: string,
   detailedDescription: string,
   descriptionOfDrawings: string,
+  options?: AIRequestOptions,
 ): Promise<string[]> => {
   // Parse figure count strictly from descriptionOfDrawings
   const figureMatches = descriptionOfDrawings.match(/图\s*(\d+)/g) || [];
@@ -1791,7 +1884,10 @@ JSON 格式：
 `;
 
   try {
-    const { text } = await generateText(prompt, "pro", { jsonMode: true });
+    const { text } = await generateText(prompt, "pro", {
+      jsonMode: true,
+      userId: options?.userId,
+    });
     const jsonStr = extractJsonObject(text);
     const result = JSON.parse(jsonStr) as { diagrams?: string[] };
     return result.diagrams || [];

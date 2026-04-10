@@ -49,7 +49,7 @@ WITH CHECK (auth.uid()::TEXT = user_id);
 -- Add comments for documentation
 COMMENT ON TABLE user_quotas IS 'User AI call quota tracking and subscription plan management';
 COMMENT ON COLUMN user_quotas.user_id IS 'Supabase auth user ID (UUID as TEXT)';
-COMMENT ON COLUMN user_quotas.organization_id IS 'Organization ID for team accounts (optional)';
+COMMENT ON COLUMN user_quotas.organization_id IS 'Organization ID for organization-linked accounts (optional)';
 COMMENT ON COLUMN user_quotas.plan IS 'Subscription plan: free, basic, pro, or enterprise';
 COMMENT ON COLUMN user_quotas.monthly_quota IS 'Total AI calls allowed per month (-1 = unlimited for enterprise)';
 COMMENT ON COLUMN user_quotas.current_usage IS 'Number of AI calls used in current billing period';

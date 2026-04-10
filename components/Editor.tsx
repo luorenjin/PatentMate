@@ -196,6 +196,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
       inventionContent: htmlToPlainText(patentData.inventionContent),
       descriptionOfDrawings: htmlToPlainText(patentData.descriptionOfDrawings),
       claimStrategy: patentData.claimStrategy,
+      userId: patentData.userId,
   });
 
   const isSelectionInsideEditor = (selection: Selection) => {
@@ -542,6 +543,7 @@ const Editor: React.FC<EditorProps> = ({ patentData, updatePatentData, setView, 
         inventionText,
         embodimentText,
         descText,
+                { userId: patentData.userId },
       );
       if (diagrams.length > 0) {
         updatePatentData('mermaidDiagrams', diagrams);

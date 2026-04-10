@@ -14,6 +14,7 @@ interface SidebarProps {
   setView: (view: AppView) => void;
   patentData: PatentData | null;
   userId?: string; // P1-1: User ID for quota display
+  quotaRefreshKey?: number;
   onSignOut?: () => void;
   onUpgrade?: () => void; // P1-1: Upgrade subscription callback
 }
@@ -23,6 +24,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   setView,
   patentData,
   userId,
+  quotaRefreshKey,
   onSignOut,
   onUpgrade,
 }) => {
@@ -129,7 +131,12 @@ const Sidebar: React.FC<SidebarProps> = ({
         {/* P1-1: Quota indicator */}
         {userId && (
           <div className="mb-2">
-            <QuotaIndicator userId={userId} compact onUpgrade={onUpgrade} />
+            <QuotaIndicator
+              userId={userId}
+              compact
+              onUpgrade={onUpgrade}
+              refreshKey={quotaRefreshKey}
+            />
           </div>
         )}
 

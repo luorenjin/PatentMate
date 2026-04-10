@@ -4,19 +4,24 @@ import {
   changeOrganizationPlan,
   getAvailableRolesForPlan,
   getOrganization,
+  getOrganizationPlanCatalog,
   getOrganizationPlanChangeError,
+  getOrganizationPlanDefinition,
   getOrganizationPlanLimits,
   getOrganizationPlanUsage,
   loadOrganization,
+  loadOrganizationPlanCatalog,
   removeOrganizationMember,
   syncOrganizationOwnerMember,
   type Organization,
   type OrganizationMemberStatus,
   type OrganizationMemberRole,
+  type OrganizationPlanDefinition,
   type OrganizationPlan,
   updateOrganization,
   updateOrganizationMember,
 } from '../../services/organizationService';
+import { upgradePlan } from '../../services/quotaService';
 import {
   getUserProfile,
   type UserProfile,
@@ -30,64 +35,10 @@ interface OrganizationSettingsProps {
   onBack: () => void;
   onOrganizationUpdated?: (organization: Organization) => void;
   onProfileUpdated?: (profile: UserProfile) => void;
+  onPlanUpdated?: () => void;
 }
 
 type SettingsSection = 'profile' | 'organization' | 'plans' | 'members';
-
-type PlanOption = {
-  value: OrganizationPlan;
-  label: string;
-  price: string;
-  subtitle: string;
-  description: string;
-  features: string[];
-  badge: string;
-};
-
-const PLAN_OPTIONS: PlanOption[] = [
-  {
-    value: 'free',
-    label: 'Free Plan',
-    price: '¥0 / 月',
-    subtitle: '适合个人试用与轻量协作',
-    description: '覆盖交底、评估与基础撰写流程，适合先把组织工作流跑通。',
-    features: [
-      '个人或小团队起步使用',
-      '基础专利交底与撰写流程',
-      '组织成员协作与本地存储',
-      '适合验证模板与方法论',
-    ],
-    badge: '入门',
-  },
-  {
-    value: 'team',
-    label: 'Team Plan',
-    price: '¥299 / 月',
-    subtitle: '适合稳定协作的专利团队',
-    description: '为日常协作型团队提供更明确的主力 Plan 选择，适合持续使用。',
-    features: [
-      '适合 3 至 10 人协作场景',
-      '更适合多人并行项目推进',
-      '便于沉淀团队工作方式',
-      '推荐作为团队主力 Plan',
-    ],
-    badge: '推荐',
-  },
-  {
-    value: 'enterprise',
-    label: 'Enterprise Plan',
-    price: '定制报价',
-    subtitle: '适合企业 IP 部门与代理机构',
-    description: '面向多角色、多项目与长期治理需求，适配更正式的企业采购场景。',
-    features: [
-      '适合企业知识产权部门',
-      '更适合跨角色和多项目并行',
-      '面向规范化交付与治理',
-      '适配长期采购与实施场景',
-    ],
-    badge: '旗舰',
-  },
-];
 
 const ROLE_OPTIONS: Array<{ value: OrganizationMemberRole; label: string }> = [
   { value: 'owner', label: '所有者' },
@@ -113,80 +64,127 @@ const PANEL_COPY: Record<
     description: '管理组织名称、简介与当前协作信息，避免团队资料分散。',
   },
   plans: {
-    eyebrow: 'Plan 升级',
-    title: 'Plan 升级',
-    description: '集中查看档位差异、席位限制与升级建议。',
+    eyebrow: '订阅方案',
+    title: '订阅方案',
+    description: '查看不同订阅计划的定价与资源额度，并为团队选择最合适的方案。',
   },
   members: {
     eyebrow: '成员权限',
     title: '成员权限',
-    description: '用更直接的方式处理邀请、角色分配与成员状态流转。',
+    description: '管理团队成员邀请、角色分配与协作权限控制。',
   },
 };
 
-const getPlanDetails = (plan: OrganizationPlan): PlanOption => {
-  return PLAN_OPTIONS.find((option) => option.value === plan) ?? PLAN_OPTIONS[0];
+const getPlanDetails = (
+  planOptions: OrganizationPlanDefinition[],
+  plan: OrganizationPlan,
+): OrganizationPlanDefinition => {
+  return planOptions.find((option) => option.key === plan)
+    ?? getOrganizationPlanDefinition(plan);
 };
 
 const getRoleLabel = (role: OrganizationMemberRole): string => {
   return ROLE_OPTIONS.find((option) => option.value === role)?.label ?? role;
 };
 
-const formatQuotaLimit = (limit: number | null): string => {
-  return limit === null ? '不限' : `${limit}`;
-};
-
 const formatQuotaUsage = (used: number, limit: number | null): string => {
   return limit === null ? `${used} / 不限` : `${used} / ${limit}`;
 };
 
-const getNextPlan = (plan: OrganizationPlan): OrganizationPlan | null => {
-  const currentIndex = PLAN_OPTIONS.findIndex((option) => option.value === plan);
-  if (currentIndex < 0 || currentIndex >= PLAN_OPTIONS.length - 1) {
+const formatPlanResourceLimit = (
+  planOption: OrganizationPlanDefinition,
+  resourceKey: string,
+): string => {
+  const resource = planOption.resources.find((item) => item.key === resourceKey);
+
+  if (!resource) {
+    return '未配置';
+  }
+
+  if (resource.limitLabel) {
+    return resource.limitLabel;
+  }
+
+  if (resource.limit === null) {
+    return '不限';
+  }
+
+  return resource.unit ? `${resource.limit} ${resource.unit}` : `${resource.limit}`;
+};
+
+const getNextPlan = (
+  planOptions: OrganizationPlanDefinition[],
+  plan: OrganizationPlan,
+): OrganizationPlan | null => {
+  const visiblePlans = planOptions.filter((option) => option.isActive || option.key === plan);
+  const currentIndex = visiblePlans.findIndex((option) => option.key === plan);
+  if (currentIndex < 0 || currentIndex >= visiblePlans.length - 1) {
     return null;
   }
 
-  return PLAN_OPTIONS[currentIndex + 1]?.value ?? null;
+  return visiblePlans[currentIndex + 1]?.key ?? null;
 };
 
-const getPlanLabel = (plan: OrganizationPlan): string => {
-  return getPlanDetails(plan).label;
+const getPlanLabel = (
+  planOptions: OrganizationPlanDefinition[],
+  plan: OrganizationPlan,
+): string => {
+  return getPlanDetails(planOptions, plan).label;
 };
 
-const getPlanRank = (plan: OrganizationPlan): number => {
-  const index = PLAN_OPTIONS.findIndex((option) => option.value === plan);
+const getPlanRank = (
+  planOptions: OrganizationPlanDefinition[],
+  plan: OrganizationPlan,
+): number => {
+  const index = planOptions.findIndex((option) => option.key === plan);
   return index >= 0 ? index : 0;
 };
 
-const isPlanUpgrade = (currentPlan: OrganizationPlan, targetPlan: OrganizationPlan): boolean => {
-  return getPlanRank(targetPlan) > getPlanRank(currentPlan);
+const isPlanUpgrade = (
+  planOptions: OrganizationPlanDefinition[],
+  currentPlan: OrganizationPlan,
+  targetPlan: OrganizationPlan,
+): boolean => {
+  return getPlanRank(planOptions, targetPlan) > getPlanRank(planOptions, currentPlan);
 };
 
-const getPlanActionLabel = (currentPlan: OrganizationPlan, nextPlan: OrganizationPlan): string => {
-  const currentIndex = getPlanRank(currentPlan);
-  const nextIndex = getPlanRank(nextPlan);
+const getPlanActionLabel = (
+  planOptions: OrganizationPlanDefinition[],
+  currentPlan: OrganizationPlan,
+  nextPlan: OrganizationPlan,
+): string => {
+  const currentIndex = getPlanRank(planOptions, currentPlan);
+  const nextIndex = getPlanRank(planOptions, nextPlan);
 
   if (currentIndex === nextIndex) {
     return '当前计划';
   }
 
   if (nextIndex > currentIndex) {
-    return `升级到 ${getPlanLabel(nextPlan)}`;
+    return `升级到 ${getPlanLabel(planOptions, nextPlan)}`;
   }
 
-  return `调整为 ${getPlanLabel(nextPlan)}`;
+  return `调整为 ${getPlanLabel(planOptions, nextPlan)}`;
 };
 
-const getRecommendedPlan = (activeMembersCount: number, managersCount: number): OrganizationPlan => {
-  if (activeMembersCount >= 12 || managersCount >= 3) {
-    return 'enterprise';
-  }
+const getRecommendedPlan = (
+  planOptions: OrganizationPlanDefinition[],
+  totalMembers: number,
+  managersCount: number,
+): OrganizationPlan => {
+  const searchablePlans = planOptions.some((option) => option.isActive)
+    ? planOptions.filter((option) => option.isActive)
+    : planOptions;
+  const matchedPlan = searchablePlans.find((option) => {
+    const memberLimit = getOrganizationPlanLimits(option.key).maxMembers;
+    const adminLimit = getOrganizationPlanLimits(option.key).maxAdmins;
+    const matchesMembers = memberLimit === null || totalMembers <= memberLimit;
+    const matchesAdmins = adminLimit === null || managersCount <= adminLimit;
 
-  if (activeMembersCount >= 4 || managersCount >= 2) {
-    return 'team';
-  }
+    return matchesMembers && matchesAdmins;
+  });
 
-  return 'free';
+  return matchedPlan?.key ?? searchablePlans[searchablePlans.length - 1]?.key ?? 'free';
 };
 
 const MEMBER_ROLE_PRIORITY: Record<OrganizationMemberRole, number> = {
@@ -236,9 +234,11 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
   onBack,
   onOrganizationUpdated,
   onProfileUpdated,
+  onPlanUpdated,
 }) => {
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [planOptions, setPlanOptions] = useState<OrganizationPlanDefinition[]>(() => getOrganizationPlanCatalog());
   const [activeSection, setActiveSection] = useState<SettingsSection>('profile');
   const [profileForm, setProfileForm] = useState({
     name: '',
@@ -263,6 +263,25 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
   const [isInvitingMember, setIsInvitingMember] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const initializePlanCatalog = async () => {
+      const nextPlanOptions = await loadOrganizationPlanCatalog();
+      if (!isMounted) {
+        return;
+      }
+
+      setPlanOptions(nextPlanOptions);
+    };
+
+    void initializePlanCatalog();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -314,7 +333,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
     if (!availableRoles.includes(memberForm.role)) {
       setMemberForm((previous) => ({ ...previous, role: fallbackRole }));
     }
-  }, [organization, memberForm.role]);
+  }, [organization, memberForm.role, planOptions]);
 
   const showSuccess = (message: string) => {
     setSuccess(message);
@@ -410,15 +429,30 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
       const { organization: updated, error: planError } = await changeOrganizationPlan(organizationId, nextPlan);
 
       if (planError || !updated) {
-        setError(translateAuthErrorMessage(planError?.message || 'Plan 计划更新失败'));
+        setError(translateAuthErrorMessage(planError?.message || '订阅方案更新失败'));
         return;
+      }
+
+      let quotaSyncError = false;
+
+      try {
+        await upgradePlan(userId, nextPlan);
+      } catch (quotaError) {
+        quotaSyncError = true;
+        console.error('Failed to sync upgraded quota plan:', quotaError);
       }
 
       setOrganization(updated);
       onOrganizationUpdated?.(updated);
-      showSuccess(`已切换至 ${getPlanLabel(nextPlan)}`);
+      onPlanUpdated?.();
+
+      if (quotaSyncError) {
+        setError('订阅方案已切换，但 AI 配额刷新失败，请稍后重试');
+      }
+
+      showSuccess(`已切换至 ${getPlanLabel(planOptions, nextPlan)}`);
     } catch (err) {
-      setError('Plan 计划更新失败，请稍后重试');
+      setError('订阅方案更新失败，请稍后重试');
     } finally {
       setIsChangingPlan(null);
     }
@@ -519,19 +553,32 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
   const pendingMembersCount = organization.members.filter((member) => member.status !== 'active').length;
   const managersCount = organization.members.filter((member) => member.role === 'owner' || member.role === 'admin').length;
   const currentPlan = organization.plan;
-  const currentPlanDetails = getPlanDetails(currentPlan);
+  const currentPlanDetails = getPlanDetails(planOptions, currentPlan);
   const currentPlanLimits = getOrganizationPlanLimits(currentPlan);
   const currentPlanUsage = getOrganizationPlanUsage(organization);
   const planLabel = currentPlanDetails.label;
-  const recommendedPlan = getRecommendedPlan(activeMembersCount, managersCount);
-  const recommendedPlanLabel = getPlanLabel(recommendedPlan);
-  const hasRecommendedUpgrade = isPlanUpgrade(currentPlan, recommendedPlan);
-  const nextPlan = getNextPlan(currentPlan);
-  const nextPlanLabel = nextPlan ? getPlanLabel(nextPlan) : null;
+  const recommendedPlan = getRecommendedPlan(planOptions, currentPlanUsage.totalMembers, currentPlanUsage.adminMembers);
+  const recommendedPlanLabel = getPlanLabel(planOptions, recommendedPlan);
+  const hasRecommendedUpgrade = isPlanUpgrade(planOptions, currentPlan, recommendedPlan);
+  const nextPlan = getNextPlan(planOptions, currentPlan);
+  const nextPlanLabel = nextPlan ? getPlanLabel(planOptions, nextPlan) : null;
   const assignableRoles: OrganizationMemberRole[] = getAvailableRolesForPlan(currentPlan).filter((role) => role !== 'owner');
   const assignableRoleSummary = assignableRoles.map((role) => getRoleLabel(role)).join(' / ');
   const memberQuotaLabel = formatQuotaUsage(currentPlanUsage.totalMembers, currentPlanLimits.maxMembers);
   const adminQuotaLabel = formatQuotaUsage(currentPlanUsage.adminMembers, currentPlanLimits.maxAdmins);
+  const currentPlanResourceCards = currentPlanDetails.resources.map((resource) => ({
+    label: resource.label,
+    value:
+      resource.key === 'organization.members'
+        ? memberQuotaLabel
+        : resource.key === 'organization.admins'
+          ? adminQuotaLabel
+          : formatPlanResourceLimit(currentPlanDetails, resource.key),
+  }));
+  const currentPlanResourceRows = [...currentPlanResourceCards, {
+    label: '可分配角色',
+    value: assignableRoleSummary,
+  }];
   const isMemberQuotaFull = currentPlanUsage.remainingMemberSlots === 0;
   const isAdminQuotaFull = currentPlanUsage.remainingAdminSlots === 0;
   const isProtectedOwnerMember = (member: Organization['members'][number]): boolean => {
@@ -571,7 +618,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
     },
     {
       id: 'plans',
-      label: 'Plan 升级',
+      label: '订阅方案',
       badge: hasRecommendedUpgrade ? '建议升级' : planLabel,
     },
     {
@@ -755,22 +802,16 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
               <div className="mt-3 text-lg font-semibold text-slate-900">{currentPlanDetails.label}</div>
               <div className="mt-1 text-sm text-slate-500">{currentPlanDetails.subtitle}</div>
               <div className="mt-4 inline-flex rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
-                {currentPlanDetails.price}
+                {currentPlanDetails.priceLabel}
               </div>
 
               <div className="mt-4 space-y-3 text-sm text-slate-600">
-                <div className="flex items-start justify-between gap-4">
-                  <span>成员席位</span>
-                  <span className="font-medium text-slate-900">{memberQuotaLabel}</span>
-                </div>
-                <div className="flex items-start justify-between gap-4">
-                  <span>管理员配额</span>
-                  <span className="font-medium text-slate-900">{adminQuotaLabel}</span>
-                </div>
-                <div className="flex items-start justify-between gap-4">
-                  <span>可分配角色</span>
-                  <span className="text-right font-medium text-slate-900">{assignableRoleSummary}</span>
-                </div>
+                {currentPlanResourceRows.map((item) => (
+                  <div key={item.label} className="flex items-start justify-between gap-4">
+                    <span>{item.label}</span>
+                    <span className="text-right font-medium text-slate-900">{item.value}</span>
+                  </div>
+                ))}
               </div>
 
               <button
@@ -798,17 +839,17 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
             <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800">
               根据当前团队规模，建议升级到
               <span className="mx-1 font-semibold">{recommendedPlanLabel}</span>
-              ，可点击右侧按钮进入独立的 Plan 升级页面。
+              ，可前往订阅方案页进行升级。
             </div>
           )}
 
           <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
-                当前 owner：
+                当前所有者：
                 <span className="ml-1 font-medium text-slate-900">{organization.ownerEmail || profile.email}</span>
               </div>
-              <div className="text-slate-500">Plan 计划已迁移到独立页面，可通过右侧按钮或左侧导航进入。</div>
+              <div className="text-slate-500">如需查看或升级团队资源配额，请前往订阅方案页设置。</div>
             </div>
           </div>
 
@@ -834,10 +875,10 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
           <div className="border-b border-slate-100 bg-[radial-gradient(circle_at_top_left,_rgba(186,230,253,0.45),_transparent_55%),linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-4">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
-                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Plan 计划</div>
-                <h3 className="mt-2 text-xl font-semibold text-slate-900">固定档位选择与升级</h3>
+                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">订阅方案</div>
+                <h3 className="mt-2 text-xl font-semibold text-slate-900">订阅方案与升级</h3>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-                  这里是独立的 Plan 升级页面。当前计划、配额限制和各档位差异都集中在这里，组织信息页只保留当前摘要与升级入口。
+                  探索适合您团队的订阅计划。升级后可解锁更高的 AI 交互额度、更多的成员席位以及专属优先服务。
                 </p>
               </div>
 
@@ -845,25 +886,19 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                 <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Current Plan</div>
                 <div className="mt-2 flex items-end gap-2">
                   <span className="text-lg font-semibold text-slate-900">{currentPlanDetails.label}</span>
-                  <span className="text-sm text-slate-500">{currentPlanDetails.price}</span>
+                  <span className="text-sm text-slate-500">{currentPlanDetails.priceLabel}</span>
                 </div>
                 <div className="mt-1 text-sm text-slate-500">{currentPlanDetails.description}</div>
               </div>
             </div>
 
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
-              <div className="rounded-xl border border-slate-200 bg-white/80 px-3 py-3 text-sm text-slate-600">
-                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">成员席位</div>
-                <div className="mt-2 text-lg font-semibold text-slate-900">{memberQuotaLabel}</div>
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-white/80 px-3 py-3 text-sm text-slate-600">
-                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">管理员配额</div>
-                <div className="mt-2 text-lg font-semibold text-slate-900">{adminQuotaLabel}</div>
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-white/80 px-3 py-3 text-sm text-slate-600">
-                <div className="text-xs uppercase tracking-[0.18em] text-slate-400">可分配角色</div>
-                <div className="mt-2 text-sm font-semibold text-slate-900">{assignableRoleSummary}</div>
-              </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {currentPlanResourceRows.map((item) => (
+                <div key={item.label} className="rounded-xl border border-slate-200 bg-white/80 px-3 py-3 text-sm text-slate-600">
+                  <div className="text-xs uppercase tracking-[0.18em] text-slate-400">{item.label}</div>
+                  <div className="mt-2 text-lg font-semibold text-slate-900">{item.value}</div>
+                </div>
+              ))}
             </div>
 
             {hasRecommendedUpgrade && (
@@ -876,20 +911,27 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
           </div>
 
           <div className="grid gap-4 p-4 xl:grid-cols-3">
-            {PLAN_OPTIONS.map((option) => {
-              const optionLimits = getOrganizationPlanLimits(option.value);
-              const optionRoles = getAvailableRolesForPlan(option.value)
+            {planOptions.map((option) => {
+              const optionRoles = getAvailableRolesForPlan(option.key)
                 .filter((role) => role !== 'owner')
                 .map((role) => getRoleLabel(role))
                 .join(' / ');
-              const isCurrent = option.value === currentPlan;
-              const isRecommended = hasRecommendedUpgrade && option.value === recommendedPlan && !isCurrent;
-              const isProcessing = isChangingPlan === option.value;
-              const planChangeError = !isCurrent ? getOrganizationPlanChangeError(organization, option.value) : null;
+              const optionResourceCards = [...option.resources.map((resource) => ({
+                label: resource.label,
+                value: formatPlanResourceLimit(option, resource.key),
+              })), {
+                label: '角色',
+                value: optionRoles,
+              }];
+              const isCurrent = option.key === currentPlan;
+              const isRecommended = hasRecommendedUpgrade && option.key === recommendedPlan && !isCurrent;
+              const isProcessing = isChangingPlan === option.key;
+              const isSelectable = option.isActive || isCurrent;
+              const planChangeError = !isCurrent ? getOrganizationPlanChangeError(organization, option.key) : null;
 
               return (
                 <article
-                  key={option.value}
+                  key={option.key}
                   className={`rounded-[24px] border p-4 transition ${
                     isCurrent
                       ? 'border-slate-900 bg-slate-900 text-white shadow-xl'
@@ -929,28 +971,18 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                   </div>
 
                   <div className={`mt-5 text-3xl font-semibold ${isCurrent ? 'text-white' : 'text-slate-900'}`}>
-                    {option.price}
+                    {option.priceLabel}
                   </div>
 
-                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                    <div className={`rounded-xl border px-3 py-2.5 text-center ${isCurrent ? 'border-white/10 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
-                      <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">成员</div>
-                      <div className={`mt-2 text-sm font-semibold ${isCurrent ? 'text-white' : 'text-slate-900'}`}>
-                        {formatQuotaLimit(optionLimits.maxMembers)}
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    {optionResourceCards.map((resource) => (
+                      <div key={`${option.key}-${resource.label}`} className={`rounded-xl border px-3 py-2.5 text-center ${isCurrent ? 'border-white/10 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">{resource.label}</div>
+                        <div className={`mt-2 text-sm font-semibold ${isCurrent ? 'text-white' : 'text-slate-900'}`}>
+                          {resource.value}
+                        </div>
                       </div>
-                    </div>
-                    <div className={`rounded-xl border px-3 py-2.5 text-center ${isCurrent ? 'border-white/10 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
-                      <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">管理员</div>
-                      <div className={`mt-2 text-sm font-semibold ${isCurrent ? 'text-white' : 'text-slate-900'}`}>
-                        {formatQuotaLimit(optionLimits.maxAdmins)}
-                      </div>
-                    </div>
-                    <div className={`rounded-xl border px-3 py-2.5 text-center ${isCurrent ? 'border-white/10 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
-                      <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">角色</div>
-                      <div className={`mt-2 text-xs font-medium leading-5 ${isCurrent ? 'text-slate-200' : 'text-slate-700'}`}>
-                        {optionRoles}
-                      </div>
-                    </div>
+                    ))}
                   </div>
 
                   <p className={`mt-3 text-sm leading-6 ${isCurrent ? 'text-slate-300' : 'text-slate-600'}`}>
@@ -976,19 +1008,23 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => handlePlanChange(option.value)}
-                    disabled={isCurrent || isChangingPlan !== null || Boolean(planChangeError)}
+                    onClick={() => handlePlanChange(option.key)}
+                    disabled={isCurrent || isChangingPlan !== null || Boolean(planChangeError) || !isSelectable}
                     className={`mt-6 inline-flex w-full items-center justify-center rounded-xl px-3.5 py-2.5 text-sm font-medium transition ${
                       isCurrent
                         ? 'cursor-default bg-white/10 text-slate-300'
-                        : option.value === 'enterprise'
+                        : option.key === 'enterprise'
                           ? 'bg-slate-900 text-white hover:bg-slate-800 disabled:bg-slate-300'
-                          : isRecommended || option.value === 'team'
+                          : isRecommended || option.key === 'pro'
                             ? 'bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-300'
                             : 'bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:bg-slate-100 disabled:text-slate-400'
                     }`}
                   >
-                    {isProcessing ? '处理中...' : getPlanActionLabel(currentPlan, option.value)}
+                    {isProcessing
+                      ? '处理中...'
+                      : !isSelectable
+                        ? '暂未启用'
+                        : getPlanActionLabel(planOptions, currentPlan, option.key)}
                   </button>
 
                   {planChangeError && !isCurrent && (
@@ -1014,9 +1050,9 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div>
-                <h3 className="text-lg font-semibold text-slate-900">成员邀请</h3>
+                <h3 className="text-lg font-semibold text-slate-900">发送邀请</h3>
                 <p className="mt-1 text-sm text-slate-500">
-                  先发送邀请，再在下方列表里完成确认加入、角色调整或移除，整个流程保持单页闭环。
+                  邀请新成员加入团队协作。发送邀请后，可在下方成员列表中统一管理角色及邀请状态。
                 </p>
               </div>
 
@@ -1131,18 +1167,12 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="text-sm font-semibold text-slate-900">当前协作限制</div>
             <div className="mt-4 space-y-3 text-sm text-slate-600">
-              <div className="flex items-start justify-between gap-4 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5">
-                <span>成员席位</span>
-                <span className="font-semibold text-slate-900">{memberQuotaLabel}</span>
-              </div>
-              <div className="flex items-start justify-between gap-4 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5">
-                <span>管理员配额</span>
-                <span className="font-semibold text-slate-900">{adminQuotaLabel}</span>
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5">
-                <div className="text-slate-500">可分配角色</div>
-                <div className="mt-1 font-semibold text-slate-900">{assignableRoleSummary}</div>
-              </div>
+              {currentPlanResourceRows.map((item) => (
+                <div key={item.label} className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5">
+                  <div className="text-slate-500">{item.label}</div>
+                  <div className="mt-1 font-semibold text-slate-900">{item.value}</div>
+                </div>
+              ))}
             </div>
 
             {(hasRecommendedUpgrade || isMemberQuotaFull) && (
@@ -1169,7 +1199,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
           <div className="flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h3 className="text-lg font-semibold text-slate-900">成员列表</h3>
-              <p className="mt-1 text-sm text-slate-500">表格内可直接调整角色，并对待接受成员执行添加或移除。</p>
+              <p className="mt-1 text-sm text-slate-500">管理团队内的所有成员。您可以随时调整他们的角色权限，或将指定成员移除。</p>
             </div>
 
             <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">

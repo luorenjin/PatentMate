@@ -300,7 +300,8 @@ export const translateAuthErrorMessage = (message: string): string => {
     /relation .* does not exist/i.test(normalizedMessage) ||
     normalizedMessage.includes("Could not find the table") ||
     normalizedMessage.includes("patent_projects") ||
-    normalizedMessage.includes("organizations")
+    normalizedMessage.includes("organizations") ||
+    normalizedMessage.includes("subscription_plan_catalog")
   ) {
     return "Supabase 数据表尚未创建，请先执行项目附带的 SQL 初始化脚本";
   }

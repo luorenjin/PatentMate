@@ -43,12 +43,18 @@ const PatentDraft: React.FC<PatentDraftProps> = ({
   ];
 
   // Initialize disclosure data if not present
-  const disclosureData = patentData.disclosureData || {
-    type: patentData.patentType || 'invention',
-    field: patentData.selectedTechnicalField || 'AI',
-    title: patentData.title || '',
-    answers: [],
-  };
+  const disclosureData = patentData.disclosureData
+    ? {
+        ...patentData.disclosureData,
+        userId: patentData.userId || patentData.disclosureData.userId,
+      }
+    : {
+        type: patentData.patentType || 'invention',
+        field: patentData.selectedTechnicalField || 'AI',
+        title: patentData.title || '',
+        userId: patentData.userId,
+        answers: [],
+      };
 
   const handleTypeSelect = (type: PatentType) => {
     updatePatentData('patentType', type);

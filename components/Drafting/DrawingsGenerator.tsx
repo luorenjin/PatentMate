@@ -71,7 +71,9 @@ const DrawingsGenerator: React.FC<DrawingsGeneratorProps> = ({
     if (!embodimentsJson) return;
     setIsGenerating(true);
     try {
-      const drawings = await generateDrawingsDescription(embodimentsJson);
+      const drawings = await generateDrawingsDescription(embodimentsJson, {
+        userId: patentData.userId,
+      });
       onUpdate(drawings);
     } catch (error) {
       console.error('Failed to generate drawings description:', error);

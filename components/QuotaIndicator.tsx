@@ -9,26 +9,43 @@
  */
 
 import React, { useState, useEffect } from "react";
-import type { QuotaUsage, SubscriptionPlan } from "../types";
-import { getQuotaUsage, getPlanLimits } from "../services/quotaService";
+import type { QuotaUsage } from "../types";
+import {
+  getQuotaUsage,
+  subscribeToQuotaChanges,
+} from "../services/quotaService";
 
 interface QuotaIndicatorProps {
   userId: string;
   compact?: boolean; // 紧凑模式（仅显示简要信息）
   onUpgrade?: () => void; // 升级订阅回调
+  refreshKey?: number;
 }
 
 const QuotaIndicator: React.FC<QuotaIndicatorProps> = ({
   userId,
   compact = false,
   onUpgrade,
+  refreshKey = 0,
 }) => {
   const [usage, setUsage] = useState<QuotaUsage | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    loadQuotaUsage();
+    void loadQuotaUsage();
+  }, [userId, refreshKey]);
+
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+
+    return subscribeToQuotaChanges((event) => {
+      if (event.userId === userId) {
+        void loadQuotaUsage();
+      }
+    });
   }, [userId]);
 
   const loadQuotaUsage = async () => {
@@ -112,33 +129,55 @@ const QuotaIndicator: React.FC<QuotaIndicatorProps> = ({
   const usageColor = getUsageColor(usage.percentage);
   const progressColor = getProgressBarColor(usage.percentage);
   const isWarning = usage.percentage >= 80;
+  const compactUsageColor = usage.percentage >= 90
+    ? "text-red-400"
+    : usage.percentage >= 80
+      ? "text-amber-400"
+      : "text-emerald-400";
 
   if (compact) {
     return (
-      <div className="flex items-center gap-2">
-        <div className="flex-1">
-          <div className="flex items-center justify-between mb-1">
-            <span className={`text-xs font-medium ${usageColor}`}>
-              {usage.used} / {usage.total} 次
-            </span>
-            <span className="text-xs text-gray-400">
-              {formatResetDate(usage.resetDate)}重置
-            </span>
-          </div>
-          <div className="w-full bg-gray-200 rounded-full h-1.5">
-            <div
-              className={`${progressColor} h-1.5 rounded-full transition-all duration-300`}
-              style={{ width: `${Math.min(100, usage.percentage)}%` }}
-            ></div>
-          </div>
+      <div className="rounded-xl border border-slate-700 bg-slate-800/80 p-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <span className="text-[11px] uppercase tracking-[0.16em] text-slate-400">
+            AI 配额
+          </span>
+          <span className="text-[11px] text-slate-500">
+            {formatResetDate(usage.resetDate)}重置
+          </span>
         </div>
-        {isWarning && onUpgrade && (
-          <button
-            onClick={onUpgrade}
-            className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
-          >
-            升级
-          </button>
+
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className={`text-sm font-semibold ${compactUsageColor}`}>
+              {usage.remaining} / {usage.total}
+            </div>
+            <div className="text-xs text-slate-400">
+              已使用 {usage.used} 次
+            </div>
+          </div>
+
+          {isWarning && onUpgrade && (
+            <button
+              onClick={onUpgrade}
+              className="shrink-0 rounded-lg bg-blue-600 px-2 py-1 text-xs text-white transition-colors hover:bg-blue-700"
+            >
+              升级
+            </button>
+          )}
+        </div>
+
+        <div className="mt-2 h-1.5 w-full rounded-full bg-slate-700">
+          <div
+            className={`${progressColor} h-1.5 rounded-full transition-all duration-300`}
+            style={{ width: `${Math.min(100, usage.percentage)}%` }}
+          ></div>
+        </div>
+
+        {isWarning && (
+          <div className="mt-2 text-[11px] text-amber-300">
+            {usage.remaining === 0 ? "配额已用完" : "配额即将用完"}
+          </div>
         )}
       </div>
     );

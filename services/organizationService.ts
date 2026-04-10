@@ -1,11 +1,17 @@
 import { generateUuid } from "./idService";
 import { getPatents, savePatentToStorage } from "./storageService";
+import {
+  getSubscriptionPlan,
+  getSubscriptionPlans,
+  loadSubscriptionPlans,
+} from "./subscriptionPlanService";
 import { supabase } from "./supabaseService";
+import type { SubscriptionPlanDefinition } from "../types";
 
 const ORGANIZATIONS_KEY = "patent_pro_organizations";
 const SUPABASE_ORGANIZATIONS_TABLE = "organizations";
 const DEFAULT_ORGANIZATION_NAME = "我的团队";
-const ORGANIZATION_PLANS = ["free", "team", "enterprise"] as const;
+const ORGANIZATION_PLANS = ["free", "basic", "pro", "enterprise"] as const;
 const ORGANIZATION_MEMBER_ROLES = [
   "owner",
   "admin",
@@ -80,6 +86,12 @@ export interface OrganizationPlanLimits {
   allowedRoles: OrganizationMemberRole[];
 }
 
+export interface OrganizationPlanDefinition
+  extends Omit<SubscriptionPlanDefinition, "key" | "allowedRoles"> {
+  key: OrganizationPlan;
+  allowedRoles: OrganizationMemberRole[];
+}
+
 export interface OrganizationPlanUsage {
   totalMembers: number;
   activeMembers: number;
@@ -106,23 +118,8 @@ interface OrganizationRow {
   payload: Organization;
 }
 
-const ORGANIZATION_PLAN_LIMITS: Record<OrganizationPlan, OrganizationPlanLimits> = {
-  free: {
-    maxMembers: 3,
-    maxAdmins: 1,
-    allowedRoles: ["owner", "member"],
-  },
-  team: {
-    maxMembers: 10,
-    maxAdmins: 3,
-    allowedRoles: ["owner", "admin", "member", "viewer"],
-  },
-  enterprise: {
-    maxMembers: null,
-    maxAdmins: null,
-    allowedRoles: ["owner", "admin", "member", "viewer"],
-  },
-};
+const ORGANIZATION_MEMBERS_RESOURCE_KEY = "organization.members";
+const ORGANIZATION_ADMINS_RESOURCE_KEY = "organization.admins";
 
 const normalizeString = (value: unknown): string => {
   return typeof value === "string" ? value : "";
@@ -143,6 +140,10 @@ const isSupabaseRelationMissingError = (
 };
 
 const normalizePlan = (value: unknown): OrganizationPlan => {
+  if (value === "team") {
+    return "pro";
+  }
+
   return ORGANIZATION_PLANS.includes(value as OrganizationPlan)
     ? (value as OrganizationPlan)
     : "free";
@@ -166,6 +167,27 @@ const hasFiniteLimit = (limit: number | null): limit is number => {
   return typeof limit === "number";
 };
 
+const getPlanResourceLimit = (
+  plan: SubscriptionPlanDefinition,
+  resourceKey: string,
+): number | null => {
+  const resource = plan.resources.find((item) => item.key === resourceKey);
+  return resource ? resource.limit : null;
+};
+
+const mapSubscriptionPlanToOrganizationPlan = (
+  plan: SubscriptionPlanDefinition,
+): OrganizationPlanDefinition => {
+  return {
+    ...plan,
+    key: normalizePlan(plan.key),
+    allowedRoles:
+      plan.allowedRoles.length > 0
+        ? plan.allowedRoles.map((role) => normalizeRole(role))
+        : ["owner", "member"],
+  };
+};
+
 const isManagerRole = (role: OrganizationMemberRole): boolean => {
   return role === "owner" || role === "admin";
 };
@@ -174,7 +196,7 @@ const isRoleAllowedForPlan = (
   plan: OrganizationPlan,
   role: OrganizationMemberRole,
 ): boolean => {
-  return ORGANIZATION_PLAN_LIMITS[plan].allowedRoles.includes(role);
+  return getOrganizationPlanDefinition(plan).allowedRoles.includes(role);
 };
 
 const normalizeMember = (
@@ -556,6 +578,40 @@ const validateMemberRoleForPlan = (
 };
 
 /**
+ * 同步读取当前缓存中的组织计划目录；若远端尚未加载，则回退到本地缓存或默认配置。
+ * @returns 组织计划定义列表。
+ */
+export const getOrganizationPlanCatalog = (): OrganizationPlanDefinition[] => {
+  return getSubscriptionPlans().map(
+    mapSubscriptionPlanToOrganizationPlan,
+  );
+};
+
+/**
+ * 从 Supabase 拉取组织计划目录，并在缺表时自动回退到默认配置。
+ * @returns 最新可用的组织计划定义列表。
+ */
+export const loadOrganizationPlanCatalog = async (): Promise<
+  OrganizationPlanDefinition[]
+> => {
+  const plans = await loadSubscriptionPlans();
+  return plans.map(mapSubscriptionPlanToOrganizationPlan);
+};
+
+/**
+ * 获取指定组织 Plan 的完整定义，包括价格、功能点、资源限制和允许角色。
+ * @param plan 组织当前或目标 Plan。
+ * @returns 命中的组织计划定义。
+ */
+export const getOrganizationPlanDefinition = (
+  plan: OrganizationPlan,
+): OrganizationPlanDefinition => {
+  return mapSubscriptionPlanToOrganizationPlan(
+    getSubscriptionPlan(plan),
+  );
+};
+
+/**
  * 获取指定 Plan 的成员与角色配额。
  * @param plan 组织当前或目标 Plan。
  * @returns Plan 对应的配额与允许角色集合。
@@ -563,7 +619,19 @@ const validateMemberRoleForPlan = (
 export const getOrganizationPlanLimits = (
   plan: OrganizationPlan,
 ): OrganizationPlanLimits => {
-  return ORGANIZATION_PLAN_LIMITS[plan];
+  const planDefinition = getOrganizationPlanDefinition(plan);
+
+  return {
+    maxMembers: getPlanResourceLimit(
+      planDefinition,
+      ORGANIZATION_MEMBERS_RESOURCE_KEY,
+    ),
+    maxAdmins: getPlanResourceLimit(
+      planDefinition,
+      ORGANIZATION_ADMINS_RESOURCE_KEY,
+    ),
+    allowedRoles: [...planDefinition.allowedRoles],
+  };
 };
 
 /**
@@ -574,7 +642,7 @@ export const getOrganizationPlanLimits = (
 export const getAvailableRolesForPlan = (
   plan: OrganizationPlan,
 ): OrganizationMemberRole[] => {
-  return [...ORGANIZATION_PLAN_LIMITS[plan].allowedRoles];
+  return [...getOrganizationPlanDefinition(plan).allowedRoles];
 };
 
 /**
@@ -695,6 +763,7 @@ export const getOrganizationsByOwner = (ownerId: string): Organization[] => {
 export const createOrganization = async (
   input: CreateOrganizationInput,
 ): Promise<Organization> => {
+  await loadOrganizationPlanCatalog();
   const now = Date.now();
 
   const organization = normalizeOrganization({
@@ -768,6 +837,8 @@ export const changeOrganizationPlan = async (
   nextPlan: OrganizationPlan,
 ): Promise<OrganizationMutationResult> => {
   try {
+    await loadOrganizationPlanCatalog();
+
     const organization = getOrganization(orgId);
     if (!organization) {
       return {
@@ -816,6 +887,8 @@ export const addOrganizationMember = async (
   input: OrganizationMemberInput,
 ): Promise<OrganizationMutationResult> => {
   try {
+    await loadOrganizationPlanCatalog();
+
     const organization = getOrganization(orgId);
     if (!organization) {
       return {
@@ -915,6 +988,8 @@ export const updateOrganizationMember = async (
   >,
 ): Promise<OrganizationMutationResult> => {
   try {
+    await loadOrganizationPlanCatalog();
+
     const organization = getOrganization(orgId);
     if (!organization) {
       return {

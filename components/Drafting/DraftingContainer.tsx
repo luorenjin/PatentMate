@@ -89,7 +89,12 @@ const DraftingContainer: React.FC<DraftingContainerProps> = ({
   );
 
   // Ensure we have disclosure data
-  const disclosureData: DisclosureData | null = patentData.disclosureData || null;
+  const disclosureData: DisclosureData | null = patentData.disclosureData
+    ? {
+        ...patentData.disclosureData,
+        userId: patentData.userId || patentData.disclosureData.userId,
+      }
+    : null;
 
   useEffect(() => {
     // Auto-save when progress changes

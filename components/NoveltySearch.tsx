@@ -190,6 +190,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
   const claimStrategyDraft = patentData.claimStrategy;
+  const aiRequestOptions = { userId: patentData.userId };
 
   const fieldRefs = {
     title: titleInputRef,
@@ -392,10 +393,17 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
     setIsGeneratingIdea(true);
 
     try {
-      const idea = await generateInventionIdea(patentData.title);
+      const idea = await generateInventionIdea(
+        patentData.title,
+        aiRequestOptions,
+      );
       updatePatentData('disclosureNotes', idea);
 
-      const structured = await summarizeTechnicalDisclosure(patentData.title, idea);
+      const structured = await summarizeTechnicalDisclosure(
+        patentData.title,
+        idea,
+        aiRequestOptions,
+      );
       updatePatentData('disclosureSummary', structured.summary);
       updatePatentData('technicalHighlights', structured.technicalHighlights);
       updatePatentData('embodiments', structured.embodiments);
@@ -453,7 +461,11 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
     setIsStructuring(true);
 
     try {
-      const structured = await summarizeTechnicalDisclosure(patentData.title, patentData.disclosureNotes);
+      const structured = await summarizeTechnicalDisclosure(
+        patentData.title,
+        patentData.disclosureNotes,
+        aiRequestOptions,
+      );
       updatePatentData('disclosureSummary', structured.summary);
       updatePatentData('technicalHighlights', structured.technicalHighlights);
       updatePatentData('embodiments', structured.embodiments);
@@ -538,7 +550,11 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
     setOptimizedContent(null);
 
     try {
-      const result = await performNoveltySearch(patentData.title, disclosurePayload);
+      const result = await performNoveltySearch(
+        patentData.title,
+        disclosurePayload,
+        aiRequestOptions,
+      );
       setReport(result);
       setIsSearchModalOpen(true);
       updatePatentData('status', 'disclosure_review');
@@ -556,7 +572,11 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
     setError(null);
 
     try {
-      const optimizedContentRaw = await optimizeInventionContent(disclosurePayload, report.analysis);
+      const optimizedContentRaw = await optimizeInventionContent(
+        disclosurePayload,
+        report.analysis,
+        aiRequestOptions,
+      );
       setOptimizedContentMarkdown(optimizedContentRaw);
       setOptimizedContent(renderMarkdown(optimizedContentRaw));
     } catch (err) {
@@ -616,7 +636,11 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
       .join('\n\n');
 
     try {
-      const basics = await analyzePatentBasics(patentData.title, disclosurePayload);
+      const basics = await analyzePatentBasics(
+        patentData.title,
+        disclosurePayload,
+        aiRequestOptions,
+      );
       updatePatentData('technicalField', basics.technicalField);
       updatePatentData('backgroundArt', patentData.existingSolutionIssues || basics.backgroundArt);
       updatePatentData('inventionContent', renderMarkdown(mergedMarkdown));

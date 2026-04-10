@@ -85,6 +85,24 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 
 - `organizations`：保存完整组织对象与元数据
 - `patent_projects`：保存完整专利项目 JSON 负载与检索字段
+- `subscription_plan_catalog`：保存可后台配置的订阅价格、资源项和资源限制
+
+#### 订阅计划后台配置
+
+订阅计划的价格、组织资源限制和 AI 配额都不再写死在前端。初始化 SQL 后，可直接在 Supabase Table Editor 或 SQL Editor 中维护 `subscription_plan_catalog`：
+
+- `plan_key`：统一订阅计划键，例如 `free`、`basic`、`pro`、`enterprise`
+- `price_label` / `price_amount`：配置前端展示价格与数值价格
+- `resources`：JSON 数组，统一定义组织席位、管理员上限和 AI 调用配额等资源项
+- `allowed_roles`：该订阅计划下允许分配的成员角色集合
+
+当前默认资源键约定：
+
+- `organization.members`：组织成员席位上限
+- `organization.admins`：组织管理员上限
+- `ai.monthly_calls`：每月 AI 调用配额
+
+只要调整表中的数据，组织设置页、成员限制校验和 AI 配额服务都会读取同一套后台计划，不需要再改前端常量。
 
 #### 邮件回跳配置
 

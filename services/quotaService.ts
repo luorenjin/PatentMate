@@ -17,48 +17,76 @@ import type {
 } from "../types";
 import { supabase } from "./supabaseService";
 import { captureError, captureMessage } from "./sentryService";
+import {
+  getPlanResourceDefinition,
+  getSubscriptionPlan,
+  loadSubscriptionPlans,
+} from "./subscriptionPlanService";
 
 const QUOTA_STORAGE_KEY = "patentmate_user_quotas";
 const SUPABASE_QUOTAS_TABLE = "user_quotas";
 
-// 订阅计划配额限制
-const PLAN_LIMITS: Record<SubscriptionPlan, PlanLimits> = {
-  free: {
-    monthlyQuota: 50,
-    features: ["基础功能", "标准 AI 模型"],
-  },
-  basic: {
-    monthlyQuota: 500,
-    features: ["基础功能", "标准 AI 模型", "优先支持", "数据导出"],
-  },
-  pro: {
-    monthlyQuota: 2000,
-    features: [
-      "基础功能",
-      "高级 AI 模型",
-      "优先支持",
-      "数据导出",
-      "团队协作",
-      "批量处理",
-    ],
-  },
-  enterprise: {
-    monthlyQuota: -1, // -1 表示无限制
-    features: [
-      "所有功能",
-      "专属客户经理",
-      "定制化服务",
-      "SLA 保障",
-      "私有部署",
-    ],
-  },
+const AI_MONTHLY_CALLS_RESOURCE_KEY = "ai.monthly_calls";
+
+type QuotaChangeReason =
+  | "usage_incremented"
+  | "quota_reset"
+  | "plan_upgraded";
+
+interface QuotaChangeEvent {
+  userId: string;
+  quota: QuotaConfig;
+  reason: QuotaChangeReason;
+  count?: number;
+}
+
+type QuotaChangeListener = (event: QuotaChangeEvent) => void;
+
+const quotaChangeListeners = new Set<QuotaChangeListener>();
+
+const notifyQuotaChange = (event: QuotaChangeEvent): void => {
+  quotaChangeListeners.forEach((listener) => {
+    try {
+      listener(event);
+    } catch (error) {
+      console.error("notifyQuotaChange listener failed:", error);
+    }
+  });
+};
+
+/**
+ * 订阅用户配额变更事件。
+ * @param listener 配额发生变化时执行的回调。
+ * @returns 取消订阅函数。
+ */
+export const subscribeToQuotaChanges = (
+  listener: QuotaChangeListener,
+): (() => void) => {
+  quotaChangeListeners.add(listener);
+
+  return () => {
+    quotaChangeListeners.delete(listener);
+  };
 };
 
 /**
  * 获取订阅计划的配额限制
  */
 export const getPlanLimits = (plan: SubscriptionPlan): PlanLimits => {
-  return PLAN_LIMITS[plan];
+  const planDefinition = getSubscriptionPlan(plan);
+  const monthlyCallLimit = getPlanResourceDefinition(
+    planDefinition,
+    AI_MONTHLY_CALLS_RESOURCE_KEY,
+  )?.limit;
+  const monthlyQuota = monthlyCallLimit === null ? -1 : (monthlyCallLimit ?? 0);
+
+  return {
+    monthlyQuota,
+    features: [...planDefinition.features],
+    resources: [...planDefinition.resources],
+    label: planDefinition.label,
+    priceLabel: planDefinition.priceLabel,
+  };
 };
 
 /**
@@ -208,6 +236,8 @@ export const getOrCreateQuotaConfig = async (
   userId: string,
   organizationId?: string
 ): Promise<QuotaConfig> => {
+  await loadSubscriptionPlans();
+
   // 1. Try loading from Supabase
   const remoteQuota = await loadQuotaFromSupabase(userId);
   if (remoteQuota) {
@@ -321,6 +351,12 @@ export const incrementUsage = async (
       quotas.push(updatedQuota);
     }
     saveQuotasToCache(quotas);
+    notifyQuotaChange({
+      userId,
+      quota: updatedQuota,
+      reason: "usage_incremented",
+      count,
+    });
 
     // Save to Supabase (background)
     void saveQuotaToSupabase(updatedQuota);
@@ -399,7 +435,7 @@ export const resetQuota = async (userId: string): Promise<QuotaConfig> => {
   try {
     const quota = await getOrCreateQuotaConfig(userId);
 
-    const resetQuota: QuotaConfig = {
+    const resetQuotaConfig: QuotaConfig = {
       ...quota,
       currentUsage: 0,
       resetDate: getNextResetDate(),
@@ -410,18 +446,23 @@ export const resetQuota = async (userId: string): Promise<QuotaConfig> => {
     const quotas = getQuotasFromCache();
     const index = quotas.findIndex((q) => q.userId === userId);
     if (index >= 0) {
-      quotas[index] = resetQuota;
+      quotas[index] = resetQuotaConfig;
     } else {
-      quotas.push(resetQuota);
+      quotas.push(resetQuotaConfig);
     }
     saveQuotasToCache(quotas);
+    notifyQuotaChange({
+      userId,
+      quota: resetQuotaConfig,
+      reason: "quota_reset",
+    });
 
     // Save to Supabase
-    void saveQuotaToSupabase(resetQuota);
+    void saveQuotaToSupabase(resetQuotaConfig);
 
     captureMessage(`Quota reset for user ${userId}`, "info");
 
-    return resetQuota;
+    return resetQuotaConfig;
   } catch (error) {
     console.error("resetQuota failed:", error);
     captureError(error as Error, { operation: "resetQuota", userId });
@@ -439,6 +480,8 @@ export const upgradePlan = async (
   newPlan: SubscriptionPlan
 ): Promise<QuotaConfig> => {
   try {
+    await loadSubscriptionPlans();
+
     const quota = await getOrCreateQuotaConfig(userId);
     const newLimits = getPlanLimits(newPlan);
 
@@ -458,6 +501,11 @@ export const upgradePlan = async (
       quotas.push(updatedQuota);
     }
     saveQuotasToCache(quotas);
+    notifyQuotaChange({
+      userId,
+      quota: updatedQuota,
+      reason: "plan_upgraded",
+    });
 
     // Save to Supabase
     const error = await saveQuotaToSupabase(updatedQuota);

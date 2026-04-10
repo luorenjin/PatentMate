@@ -49,6 +49,7 @@ const App: React.FC = () => {
   const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
   const [currentOrgName, setCurrentOrgName] = useState<string | null>(null);
   const [currentUserProfile, setCurrentUserProfile] = useState<UserProfile | null>(null);
+  const [quotaRefreshKey, setQuotaRefreshKey] = useState(0);
 
   const supabaseConfigured = isSupabaseConfigured();
 
@@ -349,6 +350,7 @@ const App: React.FC = () => {
           onBack={() => setCurrentView(AppView.DASHBOARD)}
           onOrganizationUpdated={(organization: Organization) => setCurrentOrgName(organization.name)}
           onProfileUpdated={(profile: UserProfile) => setCurrentUserProfile(profile)}
+          onPlanUpdated={() => setQuotaRefreshKey((previous) => previous + 1)}
         />
       );
     }
@@ -454,6 +456,8 @@ const App: React.FC = () => {
           currentView={currentView}
           setView={handleSidebarNavigation}
           patentData={patentData}
+          userId={currentUserId ?? undefined}
+          quotaRefreshKey={quotaRefreshKey}
           onSignOut={handleSignOut}
         />
 
@@ -497,6 +501,7 @@ const App: React.FC = () => {
               onToggle={() => setIsChatOpen(!isChatOpen)}
               currentView={currentView}
               patentData={patentData}
+              userId={currentUserId ?? undefined}
             />
           </Suspense>
         </main>
