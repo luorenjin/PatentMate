@@ -1,13 +1,18 @@
 import { GoogleGenAI } from "@google/genai";
 import type {
   ClaimStrategyPackage,
+  DisclosureAnswer,
   DisclosureData,
   DisclosureInterviewTurn,
+  DisclosureInnovationAssessment,
   NoveltyReport,
   PatentData,
+  PatentType,
   ReviewResult,
+  TechnicalField,
   TechnicalDisclosureSummary,
 } from "../types";
+import { generateDeepQuestionnaire } from "./disclosureTemplateService";
 import { captureError, monitorAICall, addBreadcrumb } from "./sentryService";
 import { checkQuota, incrementUsage } from "./quotaService";
 
@@ -24,11 +29,14 @@ const QWEN_BASE_URL =
 
 const MODEL_GEMINI_FAST = process.env.GEMINI_MODEL_FAST || "gemini-2.5-flash";
 const MODEL_GEMINI_PRO = process.env.GEMINI_MODEL_PRO || "gemini-2.5-pro";
+const MODEL_GEMINI_VISION =
+  process.env.GEMINI_MODEL_VISION || MODEL_GEMINI_PRO;
 const MODEL_GEMINI_IMAGE =
   process.env.GEMINI_MODEL_IMAGE || "imagen-4.0-generate-001";
 
 const MODEL_QWEN_FAST = process.env.QWEN_MODEL_FAST || "qwen-plus";
 const MODEL_QWEN_PRO = process.env.QWEN_MODEL_PRO || "qwen-max";
+const MODEL_QWEN_VISION = process.env.QWEN_MODEL_VISION || "";
 const MODEL_QWEN_IMAGE = process.env.QWEN_MODEL_IMAGE || "wanx2.1-t2i-turbo";
 
 const DEFAULT_REVIEW_RESULT: ReviewResult = {
@@ -44,7 +52,12 @@ const geminiClient = GEMINI_API_KEY
 
 interface QwenMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  content:
+    | string
+    | Array<
+        | { type: "text"; text: string }
+        | { type: "image_url"; image_url: { url: string } }
+      >;
 }
 
 interface QwenChatCompletionResponse {
@@ -83,6 +96,21 @@ interface DisclosureInterviewResult {
   evidenceMaterials: string[];
   pendingQuestions: string[];
   risks: string[];
+}
+
+export interface DocumentDisclosureExtractionResult {
+  sourceSummary: string;
+  keyPoints: string[];
+  technicalProblem: string;
+  existingSolutionIssues: string;
+  answers: DisclosureAnswer[];
+  technicalHighlights: string[];
+  embodiments: string[];
+  advantages: string[];
+  alternativeSolutions: string[];
+  evidenceMaterials: string[];
+  risks: string[];
+  innovationAssessment: DisclosureInnovationAssessment;
 }
 
 export type RefineTextAction = "expand" | "polish" | "fix_legal";
@@ -138,7 +166,31 @@ const REFINE_TEXT_SYSTEM_INSTRUCTION = `
   4. 避免口语化、宣传性和绝对化措辞，如“最佳”“完美”“完全解决”“显著优于一切现有技术”。
 `;
 
+const PAGE_OCR_SYSTEM_INSTRUCTION = `
+  你是一位精通中文技术资料识别的 OCR 助手，擅长从专利交底、机械图纸说明、工艺文件和研发报告页面中提取正文。
+  你只输出识别后的纯文本，不输出解释、总结、编号说明或 Markdown 代码块。
+  如果图片中存在页眉页脚、页码、水印或重复章标题，仅在其对技术理解有帮助时保留。
+  如果存在表格，请尽量按“字段：值”或逐行文本的形式还原。
+`;
+
+const DOCUMENT_DISCLOSURE_SYSTEM_INSTRUCTION = `
+  你是一位资深中国专利代理师，擅长把研发资料、技术交底模板、测试报告和机械结构说明整理为可直接起草专利的结构化交底。
+  你必须只依据资料中已经出现的内容填写答案，不得编造参数、实验结论、创新点或实施例。
+  如果资料信息不足，可以留空字符串或空数组，但要在 risks 和 innovationAssessment 中指出缺口。
+  对机械类资料，优先识别结构组成、连接关系、运动/受力路径、材料与强度、加工工艺、装配关系、技术效果与量化证据。
+`;
+
 const useGemini = (): boolean => AI_PROVIDER !== PROVIDER_QWEN;
+
+const createEmptyInnovationAssessment = (): DisclosureInnovationAssessment => {
+  return {
+    novelty: "",
+    creativity: "",
+    utility: "",
+    optimizationSuggestions: [],
+    recommendedFocus: [],
+  };
+};
 
 const getTextModel = (level: "fast" | "pro"): string => {
   if (useGemini()) {
@@ -479,6 +531,354 @@ const buildRefineContextLines = (options?: RefineTextOptions): string[] => {
   return lines;
 };
 
+const buildDisclosureQuestionnaireSchema = (
+  patentType: PatentType,
+  technicalField: TechnicalField,
+): string => {
+  return generateDeepQuestionnaire(patentType, technicalField)
+    .map((question, index) => {
+      return [
+        `${index + 1}. ${question.id}｜${question.question}`,
+        `   填写提示：${question.helpText}`,
+      ].join("\n");
+    })
+    .join("\n");
+};
+
+const normalizeDisclosureAnswerList = (
+  value: unknown,
+  validQuestionIds: Set<string>,
+): DisclosureAnswer[] => {
+  const now = Date.now();
+
+  if (Array.isArray(value)) {
+    return value
+      .filter(
+        (item): item is { questionId?: string; answer?: string } =>
+          typeof item === "object" && item !== null,
+      )
+      .map((item) => ({
+        questionId:
+          typeof item.questionId === "string" ? item.questionId.trim() : "",
+        answer: typeof item.answer === "string" ? item.answer.trim() : "",
+      }))
+      .filter(
+        (item) => item.questionId && item.answer && validQuestionIds.has(item.questionId),
+      )
+      .map((item) => ({
+        questionId: item.questionId,
+        answer: item.answer,
+        lastModified: now,
+      }));
+  }
+
+  if (value && typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .filter(
+        ([questionId, answer]) =>
+          validQuestionIds.has(questionId) && typeof answer === "string" && answer.trim(),
+      )
+      .map(([questionId, answer]) => ({
+        questionId,
+        answer: (answer as string).trim(),
+        lastModified: now,
+      }));
+  }
+
+  return [];
+};
+
+const normalizeInnovationAssessment = (
+  value: unknown,
+): DisclosureInnovationAssessment => {
+  const fallback = createEmptyInnovationAssessment();
+
+  if (!value || typeof value !== "object") {
+    return fallback;
+  }
+
+  const assessment = value as Record<string, unknown>;
+
+  return {
+    novelty: typeof assessment.novelty === "string" ? assessment.novelty : "",
+    creativity:
+      typeof assessment.creativity === "string" ? assessment.creativity : "",
+    utility: typeof assessment.utility === "string" ? assessment.utility : "",
+    optimizationSuggestions: Array.isArray(assessment.optimizationSuggestions)
+      ? assessment.optimizationSuggestions.filter(
+          (item): item is string => typeof item === "string",
+        )
+      : fallback.optimizationSuggestions,
+    recommendedFocus: Array.isArray(assessment.recommendedFocus)
+      ? assessment.recommendedFocus.filter(
+          (item): item is string => typeof item === "string",
+        )
+      : fallback.recommendedFocus,
+  };
+};
+
+/**
+ * 对扫描页图片执行 OCR，提取可继续用于技术交底整理的正文文本。
+ * @param imageBase64 PDF 页面渲染后的 PNG Base64 内容，不含 data URL 前缀。
+ * @param pageNumber 当前页码，仅用于提示词上下文。
+ * @param options AI 调用配置，主要用于配额统计。
+ * @returns OCR 得到的纯文本；失败时返回空字符串。
+ */
+export const extractTextFromPageImage = async (
+  imageBase64: string,
+  pageNumber: number,
+  options?: AIRequestOptions,
+): Promise<string> => {
+  if (!imageBase64.trim()) {
+    return "";
+  }
+
+  const prompt = `
+    请识别这张技术资料图片中的文字内容。当前图片来自资料第 ${pageNumber} 页。
+
+    输出要求：
+    1. 仅输出识别后的正文纯文本，不要解释、不加前缀、不加 Markdown 代码块。
+    2. 保留关键标题、项目符号、序号、参数值、材料牌号、尺寸、公差、步骤顺序和测试数据。
+    3. 如果是机械类资料，请重点保留结构名称、连接关系、工艺步骤、性能指标和实验数据。
+    4. 如有模糊或不可辨认内容，可跳过，不要猜测未显示清楚的数字。
+  `;
+
+  try {
+    const quotaExceededMessage = await getQuotaExceededMessage(options?.userId);
+    if (quotaExceededMessage) {
+      return "";
+    }
+
+    if (geminiClient) {
+      const response = await geminiClient.models.generateContent({
+        model: MODEL_GEMINI_VISION,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  mimeType: "image/png",
+                  data: imageBase64,
+                },
+              },
+            ],
+          },
+        ] as any,
+        config: {
+          systemInstruction: PAGE_OCR_SYSTEM_INSTRUCTION,
+        },
+      } as any);
+
+      const text = extractTextFromResponse(response.text || "");
+      if (options?.userId && text) {
+        void incrementUsage(options.userId, 1);
+      }
+      return text;
+    }
+
+    if (!QWEN_API_KEY || !MODEL_QWEN_VISION) {
+      console.error("Vision OCR requires Gemini API key or QWEN_MODEL_VISION.");
+      return "";
+    }
+
+    const qwenMessages: QwenMessage[] = [
+      { role: "system", content: PAGE_OCR_SYSTEM_INSTRUCTION },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: prompt },
+          {
+            type: "image_url",
+            image_url: { url: `data:image/png;base64,${imageBase64}` },
+          },
+        ],
+      },
+    ];
+
+    const text = await requestQwenChat(qwenMessages, MODEL_QWEN_VISION);
+    const normalized = extractTextFromResponse(text);
+    if (options?.userId && normalized) {
+      void incrementUsage(options.userId, 1);
+    }
+    return normalized;
+  } catch (error) {
+    console.error("extractTextFromPageImage failed:", error);
+    return "";
+  }
+};
+
+/**
+ * 将上传的研发资料整理为结构化技术交底答案，并补充创新点审查视角下的优化建议。
+ * @param title 发明名称。
+ * @param patentType 专利类型，用于绑定不同问卷结构。
+ * @param technicalField 技术领域，用于生成领域特定问题和机械类定向约束。
+ * @param documentText 从 DOCX/PDF 中提取的纯文本内容。
+ * @param options AI 调用配置，主要用于配额统计。
+ * @returns 可直接回填到 DisclosureData.answers 的答案集合及创新点评估；失败时返回空结构。
+ */
+export const extractStructuredDisclosureFromDocument = async (
+  title: string,
+  patentType: PatentType,
+  technicalField: TechnicalField,
+  documentText: string,
+  options?: AIRequestOptions,
+): Promise<DocumentDisclosureExtractionResult> => {
+  const fallback: DocumentDisclosureExtractionResult = {
+    sourceSummary: "",
+    keyPoints: [],
+    technicalProblem: "",
+    existingSolutionIssues: "",
+    answers: [],
+    technicalHighlights: [],
+    embodiments: [],
+    advantages: [],
+    alternativeSolutions: [],
+    evidenceMaterials: [],
+    risks: [],
+    innovationAssessment: createEmptyInnovationAssessment(),
+  };
+
+  if (!documentText.trim()) {
+    return fallback;
+  }
+
+  const questions = generateDeepQuestionnaire(patentType, technicalField);
+  const validQuestionIds = new Set(questions.map((question) => question.id));
+  const questionnaireSchema = buildDisclosureQuestionnaireSchema(
+    patentType,
+    technicalField,
+  );
+  const fieldFocus =
+    technicalField === "机械"
+      ? "当前资料为机械类申请，请重点提取结构构成、连接关系、运动路径、材料牌号、强度校核、加工工艺、公差和技术效果。"
+      : `当前资料技术领域为${technicalField}，请优先提取与该领域审查关注点对应的关键技术特征、参数和效果证据。`;
+  const prompt = `
+    请把下面上传的研发资料整理成技术交底结构化结果，供后续专利新颖性、创造性、实用性优化与申请撰写使用。
+
+    发明名称：${title}
+    专利类型：${getPatentTypeLabel(patentType)}
+    技术领域：${technicalField}
+    ${fieldFocus}
+
+    问卷清单（你需要尽可能把资料内容映射到这些问题上）：
+    ${questionnaireSchema}
+
+    原始资料文本（可能包含 OCR 噪声）：
+    ${truncateForPrompt(documentText, 18000)}
+
+    处理要求：
+    1. sourceSummary：用 180-260 字概括资料中的核心技术方案。
+    2. technicalProblem：提炼资料中明确要解决的技术问题或工程痛点。
+    3. existingSolutionIssues：提炼现有方案、现有结构或现有工艺的不足。
+    4. keyPoints：提炼 4-8 条资料中最值得继续保护或补充证明的技术要点。
+    5. questionAnswers：按问卷问题尽可能映射答案；若资料有依据，至少优先填写 q1、q2、q3、q4 以及与当前领域最相关的 1-3 个问题。
+    6. technicalHighlights、embodiments、advantages、alternativeSolutions、evidenceMaterials、risks 的提取规则与现有技术交底一致，尤其不要把量化数据写进 alternativeSolutions。
+    7. innovationAssessment 需要分别从新颖性、创造性、实用性三个角度评估当前创新点质量，并给出 optimizationSuggestions 与 recommendedFocus。
+    8. 如资料疑似机械模板，请保持部件名称、编号、参数和装配关系的一致性。
+
+    请返回 JSON：
+    {
+      "sourceSummary": "...",
+      "technicalProblem": "...",
+      "existingSolutionIssues": "...",
+      "keyPoints": ["..."],
+      "questionAnswers": [
+        { "questionId": "q1", "answer": "..." }
+      ],
+      "technicalHighlights": ["..."],
+      "embodiments": ["..."],
+      "advantages": ["..."],
+      "alternativeSolutions": ["..."],
+      "evidenceMaterials": ["..."],
+      "risks": ["..."],
+      "innovationAssessment": {
+        "novelty": "...",
+        "creativity": "...",
+        "utility": "...",
+        "optimizationSuggestions": ["..."],
+        "recommendedFocus": ["..."]
+      }
+    }
+  `;
+
+  try {
+    const { text } = await generateText(prompt, "pro", {
+      jsonMode: true,
+      systemInstruction: DOCUMENT_DISCLOSURE_SYSTEM_INSTRUCTION,
+      userId: options?.userId,
+    });
+    const jsonString = extractJsonObject(text);
+    const result = JSON.parse(jsonString) as {
+      sourceSummary?: string;
+      technicalProblem?: string;
+      existingSolutionIssues?: string;
+      keyPoints?: unknown;
+      questionAnswers?: unknown;
+      technicalHighlights?: unknown;
+      embodiments?: unknown;
+      advantages?: unknown;
+      alternativeSolutions?: unknown;
+      evidenceMaterials?: unknown;
+      risks?: unknown;
+      innovationAssessment?: unknown;
+    };
+
+    return {
+      sourceSummary:
+        typeof result.sourceSummary === "string" ? result.sourceSummary : "",
+      technicalProblem:
+        typeof result.technicalProblem === "string" ? result.technicalProblem : "",
+      existingSolutionIssues:
+        typeof result.existingSolutionIssues === "string"
+          ? result.existingSolutionIssues
+          : "",
+      keyPoints: Array.isArray(result.keyPoints)
+        ? result.keyPoints.filter((item): item is string => typeof item === "string")
+        : [],
+      answers: normalizeDisclosureAnswerList(
+        result.questionAnswers,
+        validQuestionIds,
+      ),
+      technicalHighlights: Array.isArray(result.technicalHighlights)
+        ? result.technicalHighlights.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : [],
+      embodiments: Array.isArray(result.embodiments)
+        ? result.embodiments.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : [],
+      advantages: Array.isArray(result.advantages)
+        ? result.advantages.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : [],
+      alternativeSolutions: Array.isArray(result.alternativeSolutions)
+        ? result.alternativeSolutions.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : [],
+      evidenceMaterials: Array.isArray(result.evidenceMaterials)
+        ? result.evidenceMaterials.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : [],
+      risks: Array.isArray(result.risks)
+        ? result.risks.filter((item): item is string => typeof item === "string")
+        : [],
+      innovationAssessment: normalizeInnovationAssessment(
+        result.innovationAssessment,
+      ),
+    };
+  } catch (error) {
+    console.error("extractStructuredDisclosureFromDocument failed:", error);
+    return fallback;
+  }
+};
+
 /**
  * Performs a Novelty Search using gemini-2.5-flash and Google Search Grounding.
  * This fulfills Requirement 2: "Check patent system, judge success probability".
@@ -637,23 +1037,40 @@ export const performNoveltySearch = async (
  */
 export const optimizeInventionContent = async (
   currentContent: string,
-  analysis: string,
+  noveltyReport: Pick<NoveltyReport, "analysis" | "avoidanceRecommendations">,
   options?: AIRequestOptions,
 ): Promise<string> => {
+  const avoidanceRecommendations = Array.isArray(
+    noveltyReport.avoidanceRecommendations,
+  )
+    ? noveltyReport.avoidanceRecommendations
+    : [];
+  const avoidanceSummary =
+    avoidanceRecommendations.length > 0
+      ? avoidanceRecommendations
+          .map((item, index) => `${index + 1}. ${item}`)
+          .join("\n")
+      : "未提供明确规避建议，请根据下方分析自行提炼差异化方向。";
+
   const prompt = `
     你是一位专业的专利工程师和技术专家。
     
     当前的发明内容概要：
     ${currentContent}
     
-    根据以下的新颖性审查/分析意见（指出了现有技术的重合点或不足）：
-    ${analysis}
+    请优先落实以下“专利规避建议”（这是本次改写的最高优先级）：
+    ${avoidanceSummary}
+
+    辅助参考的新颖性审查/分析意见（指出了现有技术的重合点或不足）：
+    ${noveltyReport.analysis}
     
     任务：
-    请重写并优化“发明内容概要”，以提高其新颖性和授权概率。
-    1. **规避现有技术**：针对审查意见中提到的对比文件，通过增加独特的限制特征来构建“护城河”。
-    2. **突出创造性**：强调本发明解决了现有技术无法解决的技术难题，并未产生预料不到的技术效果。
-    3. **深化技术细节**：增加具体实施方式的描述，使其看起来更像一个成熟、可落地的技术方案。
+    请输出一版可以直接替换“结构化交底摘要”的完整新文本，以提高其新颖性和授权概率。
+    1. **规避现有技术**：优先根据“专利规避建议”加入真正能拉开差异的限制特征、结构关系、流程顺序、参数边界或应用条件。
+    2. **突出创造性**：明确现有技术解决不了什么问题，以及本方案为什么不是顺手拼接出来的常规组合。
+    3. **深化技术细节**：补足落地实施所需的关键步骤、部件协同关系或作用链条，但不得编造原始交底中没有出现的实验数据。
+    4. **输出形态**：必须输出完整替代稿，不要写“补充如下”“新增如下”“在原基础上增加”等追加式措辞。
+    5. **禁止项**：不要输出评分、授权概率、说明前言、标题或客套话。
     
     请直接返回优化后的文本内容，不要包含“好的”、“优化后的内容如下”等客套话。
   `;

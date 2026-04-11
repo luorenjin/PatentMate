@@ -28,6 +28,7 @@ const DisclosureSummary: React.FC<DisclosureSummaryProps> = ({
 
   const answeredCount = questions.filter((question) => getAnswer(question.id).trim().length > 0).length;
   const totalQuestions = questions.length;
+  const importSnapshot = disclosureData.importSnapshot;
 
   return (
     <div className="max-w-3xl mx-auto">
@@ -59,6 +60,64 @@ const DisclosureSummary: React.FC<DisclosureSummaryProps> = ({
           </div>
         </div>
       </div>
+
+      {disclosureData.mode === 'upload' && importSnapshot && (
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm mb-6 space-y-5">
+          <div>
+            <div className="text-xs text-slate-500 mb-1">资料来源</div>
+            <div className="font-semibold text-slate-900">
+              {importSnapshot.source.fileName}
+              {importSnapshot.source.pageCount
+                ? ` · ${importSnapshot.source.pageCount} 页`
+                : ''}
+              {importSnapshot.source.usedOcr ? ' · 含 OCR 识别' : ''}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs text-slate-500 mb-2">资料摘要</div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 leading-6 whitespace-pre-wrap">
+              {importSnapshot.source.extractedSummary || '暂无摘要。'}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-700 mb-2">优化关注点</div>
+              <div className="space-y-2 text-sm text-slate-600">
+                {importSnapshot.innovationAssessment.recommendedFocus.length > 0 ? (
+                  importSnapshot.innovationAssessment.recommendedFocus.map((item) => (
+                    <div key={item}>{item}</div>
+                  ))
+                ) : (
+                  <div className="text-slate-400">暂无建议。</div>
+                )}
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-700 mb-2">补强建议</div>
+              <div className="space-y-2 text-sm text-slate-600">
+                {importSnapshot.innovationAssessment.optimizationSuggestions.length > 0 ? (
+                  importSnapshot.innovationAssessment.optimizationSuggestions.map((item) => (
+                    <div key={item}>{item}</div>
+                  ))
+                ) : (
+                  <div className="text-slate-400">暂无建议。</div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {importSnapshot.source.warnings.length > 0 && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 space-y-1">
+              <div className="font-semibold">解析提醒</div>
+              {importSnapshot.source.warnings.map((warning) => (
+                <div key={warning}>{warning}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Answers summary */}
       <div className="space-y-4 mb-8">

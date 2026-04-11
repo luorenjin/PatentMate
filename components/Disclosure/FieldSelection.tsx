@@ -136,7 +136,7 @@ const FieldSelection: React.FC<FieldSelectionProps> = ({ selectedField, title: i
               : 'bg-slate-200 text-slate-400 cursor-not-allowed'
           }`}
         >
-          开始答题
+          选择交底方式
         </button>
       </div>
     </div>

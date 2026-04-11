@@ -1,8 +1,12 @@
 import {
+  DisclosureImportSnapshot,
+  DisclosureInnovationAssessment,
+  DisclosureMode,
   DisclosureAnswer,
   DisclosureData,
   DisclosureInterviewTurn,
   DraftingProgress,
+  ImportedDocumentType,
   PatentData,
   PatentType,
   PatentStatus,
@@ -102,6 +106,80 @@ const normalizeStringArray = (value: unknown): string[] => {
   return value.filter((item): item is string => typeof item === "string");
 };
 
+const normalizeDisclosureMode = (
+  value: unknown,
+): DisclosureMode | undefined => {
+  return value === "questionnaire" || value === "upload" ? value : undefined;
+};
+
+const normalizeImportedDocumentType = (
+  value: unknown,
+): ImportedDocumentType => {
+  return value === "docx" || value === "pdf" ? value : "unknown";
+};
+
+const normalizeDisclosureInnovationAssessment = (
+  value: unknown,
+): DisclosureInnovationAssessment | undefined => {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const assessment = value as Record<string, unknown>;
+
+  return {
+    novelty: typeof assessment.novelty === "string" ? assessment.novelty : "",
+    creativity:
+      typeof assessment.creativity === "string" ? assessment.creativity : "",
+    utility: typeof assessment.utility === "string" ? assessment.utility : "",
+    optimizationSuggestions: normalizeStringArray(
+      assessment.optimizationSuggestions,
+    ),
+    recommendedFocus: normalizeStringArray(assessment.recommendedFocus),
+  };
+};
+
+const normalizeDisclosureImportSnapshot = (
+  value: unknown,
+): DisclosureImportSnapshot | undefined => {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const snapshot = value as Record<string, unknown>;
+  const sourceValue = snapshot.source;
+  const innovationAssessment = normalizeDisclosureInnovationAssessment(
+    snapshot.innovationAssessment,
+  );
+
+  if (!sourceValue || typeof sourceValue !== "object" || !innovationAssessment) {
+    return undefined;
+  }
+
+  const source = sourceValue as Record<string, unknown>;
+
+  return {
+    source: {
+      fileName:
+        typeof source.fileName === "string" ? source.fileName : "未命名资料",
+      fileType: normalizeImportedDocumentType(source.fileType),
+      fileSize: typeof source.fileSize === "number" ? source.fileSize : 0,
+      pageCount:
+        typeof source.pageCount === "number" ? source.pageCount : undefined,
+      usedOcr: source.usedOcr === true,
+      extractedAt:
+        typeof source.extractedAt === "number" ? source.extractedAt : Date.now(),
+      extractedSummary:
+        typeof source.extractedSummary === "string"
+          ? source.extractedSummary
+          : "",
+      warnings: normalizeStringArray(source.warnings),
+    },
+    keyPoints: normalizeStringArray(snapshot.keyPoints),
+    innovationAssessment,
+  };
+};
+
 const normalizeInterviewTurns = (value: unknown): DisclosureInterviewTurn[] => {
   if (!Array.isArray(value)) return [];
   return value
@@ -142,7 +220,10 @@ const normalizeDisclosureData = (
     type: data.type as PatentType,
     field: data.field as TechnicalField,
     title: data.title as string,
+    userId: typeof data.userId === "string" ? data.userId : undefined,
+    mode: normalizeDisclosureMode(data.mode),
     answers,
+    importSnapshot: normalizeDisclosureImportSnapshot(data.importSnapshot),
     completedAt:
       typeof data.completedAt === "number" ? data.completedAt : undefined,
   };

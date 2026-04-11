@@ -1,6 +1,3 @@
-<div align="center">
-<img width="1200" height="475" alt="PatentMate Banner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-
 # PatentMate — AI 驱动的专利撰写助手
 
 **从技术披露到正式申请文件，全流程 AI 辅助**
@@ -23,7 +20,7 @@ PatentMate 是一款 AI 驱动的专利撰写 SaaS 应用，集成 Google Gemini
 
 | 阶段 | 功能 |
 |------|------|
-| 📋 **技术披露** | 结构化问卷引导，AI 辅助深挖技术亮点 |
+| 📋 **技术披露** | 结构化问卷引导 + DOCX/PDF 资料上传整理，AI 辅助深挖技术亮点 |
 | 🔍 **新颖性评估** | 接入 Google 搜索，生成先有技术分析报告 |
 | ✍️ **智能撰写** | 分段生成摘要、权利要求书、具体实施方式 |
 | 📝 **文书润色** | 法言法语转化、模拟审查、一键导出 DOCX / PDF |
@@ -135,6 +132,7 @@ GEMINI_API_KEY=your_gemini_api_key
 # 可选：覆盖模型版本
 GEMINI_MODEL_FAST=gemini-2.5-flash   # 用于新颖性检索等轻量任务
 GEMINI_MODEL_PRO=gemini-2.5-pro      # 用于撰写、润色等高质量任务
+GEMINI_MODEL_VISION=gemini-2.5-pro   # 用于扫描 PDF OCR / 资料识别
 ```
 
 **切换至阿里通义千问（OpenAI 兼容接口）**
@@ -145,7 +143,15 @@ QWEN_API_KEY=your_qwen_api_key
 QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 QWEN_MODEL_FAST=qwen-plus
 QWEN_MODEL_PRO=qwen-max
+QWEN_MODEL_VISION=your_multimodal_model   # 可选：扫描 PDF OCR / 资料识别
 ```
+
+### 上传资料模式说明
+
+- 技术交底阶段新增“上传资料模式”，支持 `.docx` 与 `.pdf`
+- 文本型 PDF 优先走本地文本提取；扫描 PDF 会自动触发 OCR
+- 当前不会保存原始文件本体，只保存提取后的结构化交底结果、摘要和创新点评估
+- 机械类资料会优先提取结构组成、连接关系、运动路径、材料/强度、加工工艺和技术效果
 
 ---
 

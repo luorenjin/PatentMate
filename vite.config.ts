@@ -53,6 +53,9 @@ export default defineConfig(({ mode }) => {
       "process.env.GEMINI_MODEL_PRO": JSON.stringify(
         env.GEMINI_MODEL_PRO || "gemini-3.1-pro",
       ),
+      "process.env.GEMINI_MODEL_VISION": JSON.stringify(
+        env.GEMINI_MODEL_VISION || env.GEMINI_MODEL_PRO || "gemini-3.1-pro",
+      ),
       "process.env.GEMINI_MODEL_IMAGE": JSON.stringify(
         env.GEMINI_MODEL_IMAGE || "imagen-4.0-generate-001",
       ),
@@ -61,6 +64,9 @@ export default defineConfig(({ mode }) => {
       ),
       "process.env.QWEN_MODEL_PRO": JSON.stringify(
         env.QWEN_MODEL_PRO || "qwen3.6-plus",
+      ),
+      "process.env.QWEN_MODEL_VISION": JSON.stringify(
+        env.QWEN_MODEL_VISION || "",
       ),
       "process.env.QWEN_MODEL_IMAGE": JSON.stringify(
         env.QWEN_MODEL_IMAGE || "qwen-image-2.0",

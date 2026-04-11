@@ -1,8 +1,17 @@
 import React, { useState } from 'react';
-import { AppView, PatentData, PatentType, TechnicalField } from '../types';
+import {
+  AppView,
+  DisclosureData,
+  DisclosureMode,
+  PatentData,
+  PatentType,
+  TechnicalField,
+} from '../types';
 import TypeSelection from './Disclosure/TypeSelection';
 import FieldSelection from './Disclosure/FieldSelection';
+import ModeSelection from './Disclosure/ModeSelection';
 import QuestionWizard from './Disclosure/QuestionWizard';
+import DocumentUpload from './Disclosure/DocumentUpload';
 import DisclosureSummary from './Disclosure/DisclosureSummary';
 import { buildDisclosurePatentFields } from '../services/disclosureTemplateService';
 import { savePatentToStorage } from '../services/storageService';
@@ -15,17 +24,27 @@ interface PatentDraftProps {
   onBack: () => void;
 }
 
-type Step = 'type_selection' | 'field_selection' | 'wizard' | 'summary';
+type Step =
+  | 'type_selection'
+  | 'field_selection'
+  | 'mode_selection'
+  | 'wizard'
+  | 'upload'
+  | 'summary';
 
 const getInitialStep = (patentData: PatentData): Step => {
   if (!patentData.patentType) return 'type_selection';
   if (!patentData.selectedTechnicalField || !patentData.title?.trim()) return 'field_selection';
 
+  const mode = patentData.disclosureData?.mode;
   const answeredCount = patentData.disclosureData?.answers.filter((item) => item.answer.trim().length > 0).length || 0;
 
   if (patentData.status === 'disclosure_review') return 'summary';
+  if (mode === 'upload' && answeredCount === 0) return 'upload';
   if (answeredCount > 0) return 'wizard';
-  return 'wizard';
+  if (mode === 'upload') return 'upload';
+  if (mode === 'questionnaire') return 'wizard';
+  return 'mode_selection';
 };
 
 const PatentDraft: React.FC<PatentDraftProps> = ({
@@ -39,7 +58,9 @@ const PatentDraft: React.FC<PatentDraftProps> = ({
   const subSteps: Array<{ id: Step; label: string }> = [
     { id: 'type_selection', label: '选择专利类型' },
     { id: 'field_selection', label: '选择技术领域' },
+    { id: 'mode_selection', label: '选择交底方式' },
     { id: 'wizard', label: '填写交底问卷' },
+    { id: 'upload', label: '上传研发资料' },
     { id: 'summary', label: '确认交底内容' },
   ];
 
@@ -54,21 +75,43 @@ const PatentDraft: React.FC<PatentDraftProps> = ({
         field: patentData.selectedTechnicalField || 'AI',
         title: patentData.title || '',
         userId: patentData.userId,
+        mode: undefined,
         answers: [],
       };
 
+  const persistDisclosureData = (nextDisclosureData: DisclosureData) => {
+    updatePatentData('disclosureData', nextDisclosureData);
+    void savePatentToStorage({
+      ...patentData,
+      disclosureData: nextDisclosureData,
+      lastModified: Date.now(),
+    });
+  };
+
   const handleTypeSelect = (type: PatentType) => {
     updatePatentData('patentType', type);
-    updatePatentData('disclosureData', { ...disclosureData, type });
+    updatePatentData('disclosureData', { ...disclosureData, type, mode: undefined });
     setStep('field_selection');
   };
 
   const handleFieldAndTitleSubmit = (field: TechnicalField, title: string) => {
     updatePatentData('selectedTechnicalField', field);
     updatePatentData('title', title);
-    updatePatentData('disclosureData', { ...disclosureData, field, title });
-    void savePatentToStorage({ ...patentData, selectedTechnicalField: field, title, disclosureData: { ...disclosureData, field, title }, lastModified: Date.now() });
-    setStep('wizard');
+    const nextDisclosureData = { ...disclosureData, field, title };
+    updatePatentData('disclosureData', nextDisclosureData);
+    void savePatentToStorage({ ...patentData, selectedTechnicalField: field, title, disclosureData: nextDisclosureData, lastModified: Date.now() });
+    setStep('mode_selection');
+  };
+
+  const handleModeSelect = (mode: DisclosureMode) => {
+    const nextDisclosureData: DisclosureData = {
+      ...disclosureData,
+      mode,
+      importSnapshot: mode === 'upload' ? disclosureData.importSnapshot : undefined,
+    };
+
+    persistDisclosureData(nextDisclosureData);
+    setStep(mode === 'upload' ? 'upload' : 'wizard');
   };
 
   const handleAnswerChange = (questionId: string, answer: string) => {
@@ -79,8 +122,11 @@ const PatentDraft: React.FC<PatentDraftProps> = ({
     } else {
       newAnswers.push({ questionId, answer, lastModified: Date.now() });
     }
-    updatePatentData('disclosureData', { ...disclosureData, answers: newAnswers });
-    void savePatentToStorage({ ...patentData, disclosureData: { ...disclosureData, answers: newAnswers }, lastModified: Date.now() });
+    persistDisclosureData({ ...disclosureData, answers: newAnswers });
+  };
+
+  const handleImportedDisclosureApply = (nextDisclosureData: DisclosureData) => {
+    persistDisclosureData(nextDisclosureData);
   };
 
   const handleWizardComplete = () => {
@@ -171,6 +217,14 @@ const PatentDraft: React.FC<PatentDraftProps> = ({
         />
       )}
 
+      {step === 'mode_selection' && (
+        <ModeSelection
+          selectedMode={disclosureData.mode || null}
+          onSelect={handleModeSelect}
+          onBack={() => setStep('field_selection')}
+        />
+      )}
+
       {step === 'wizard' && (
         <QuestionWizard
           patentType={patentData.patentType || 'invention'}
@@ -179,14 +233,33 @@ const PatentDraft: React.FC<PatentDraftProps> = ({
           disclosureData={disclosureData}
           onAnswerChange={handleAnswerChange}
           onComplete={handleWizardComplete}
-          onBack={() => setStep('field_selection')}
+          onBack={() => setStep('mode_selection')}
+        />
+      )}
+
+      {step === 'upload' && (
+        <DocumentUpload
+          patentType={patentData.patentType || 'invention'}
+          technicalField={patentData.selectedTechnicalField || 'AI'}
+          title={patentData.title || ''}
+          disclosureData={disclosureData}
+          onApplyImport={handleImportedDisclosureApply}
+          onContinueToSummary={() => setStep('summary')}
+          onContinueToWizard={() => setStep('wizard')}
+          onBack={() => setStep('mode_selection')}
         />
       )}
 
       {step === 'summary' && (
         <DisclosureSummary
           disclosureData={disclosureData}
-          onEdit={() => setStep('wizard')}
+          onEdit={() => setStep(
+            disclosureData.answers.some((item) => item.answer.trim().length > 0)
+              ? 'wizard'
+              : disclosureData.mode === 'upload'
+                ? 'upload'
+                : 'wizard',
+          )}
           onConfirm={handleSummaryConfirm}
         />
       )}

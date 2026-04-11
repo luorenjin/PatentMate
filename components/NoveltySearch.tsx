@@ -117,6 +117,13 @@ const buildLocalDisclosureDraft = (markdown: string) => {
   };
 };
 
+const buildNoveltySearchSignature = (title: string, disclosurePayload: string) => {
+  return JSON.stringify({
+    title: title.trim(),
+    disclosurePayload,
+  });
+};
+
 const disclosureTemplates = [
   {
     id: 'software',
@@ -168,6 +175,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
   const [optimizedContent, setOptimizedContent] = useState<string | null>(null);
   const [optimizedContentMarkdown, setOptimizedContentMarkdown] = useState<string | null>(null);
   const [report, setReport] = useState<NoveltyReport | null>(null);
+  const [isReportStale, setIsReportStale] = useState(false);
   const [riskTips, setRiskTips] = useState<string[]>([]);
   const [interviewInput, setInterviewInput] = useState('');
   const [isInterviewing, setIsInterviewing] = useState(false);
@@ -188,6 +196,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
   const advantagesRef = useRef<HTMLDivElement>(null);
   const evidenceMaterialsRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const lastSearchSignatureRef = useRef('');
 
   const claimStrategyDraft = patentData.claimStrategy;
   const aiRequestOptions = { userId: patentData.userId };
@@ -274,6 +283,20 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
 
     return sections.filter((item) => !item.endsWith('：')).join('\n');
   }, [patentData]);
+
+  const currentSearchSignature = useMemo(
+    () => buildNoveltySearchSignature(patentData.title, disclosurePayload),
+    [disclosurePayload, patentData.title],
+  );
+
+  useEffect(() => {
+    if (!report) {
+      setIsReportStale(false);
+      return;
+    }
+
+    setIsReportStale(lastSearchSignatureRef.current !== currentSearchSignature);
+  }, [currentSearchSignature, report]);
 
   const updateListField = (
     key:
@@ -555,6 +578,8 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
         disclosurePayload,
         aiRequestOptions,
       );
+      lastSearchSignatureRef.current = currentSearchSignature;
+      setIsReportStale(false);
       setReport(result);
       setIsSearchModalOpen(true);
       updatePatentData('status', 'disclosure_review');
@@ -574,7 +599,10 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
     try {
       const optimizedContentRaw = await optimizeInventionContent(
         disclosurePayload,
-        report.analysis,
+        {
+          analysis: report.analysis,
+          avoidanceRecommendations: report.avoidanceRecommendations,
+        },
         aiRequestOptions,
       );
       setOptimizedContentMarkdown(optimizedContentRaw);
@@ -587,18 +615,18 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
   };
 
   const handleAcceptOptimization = () => {
-    if (!optimizedContent || !optimizedContentMarkdown) return;
+    if (!optimizedContentMarkdown) return;
 
-    const mergedSummary = [patentData.disclosureSummary, optimizedContentMarkdown]
-      .filter(Boolean)
-      .join('\n\n');
+    const nextSummary = optimizedContentMarkdown.trim();
+    if (!nextSummary) return;
 
-    updatePatentData('disclosureSummary', mergedSummary);
-    updatePatentData('inventionContent', `${patentData.inventionContent}\n\n<h3>挑战式补强建议</h3>\n${optimizedContent}`.trim());
+    updatePatentData('disclosureSummary', nextSummary);
+    updatePatentData('claimStrategyConfirmed', false);
     void applyStrategyPackage({
       ...patentData,
-      disclosureSummary: mergedSummary,
+      disclosureSummary: nextSummary,
     });
+    setIsReportStale(true);
     setOptimizedContent(null);
     setOptimizedContentMarkdown(null);
   };

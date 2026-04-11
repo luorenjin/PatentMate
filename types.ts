@@ -90,6 +90,35 @@ export type PatentStatus =
   | "editing"
   | "ready_to_submit";
 
+export type DisclosureMode = "questionnaire" | "upload";
+
+export type ImportedDocumentType = "docx" | "pdf" | "unknown";
+
+export interface DisclosureInnovationAssessment {
+  novelty: string;
+  creativity: string;
+  utility: string;
+  optimizationSuggestions: string[];
+  recommendedFocus: string[];
+}
+
+export interface ImportedDisclosureSource {
+  fileName: string;
+  fileType: ImportedDocumentType;
+  fileSize: number;
+  pageCount?: number;
+  usedOcr: boolean;
+  extractedAt: number;
+  extractedSummary: string;
+  warnings: string[];
+}
+
+export interface DisclosureImportSnapshot {
+  source: ImportedDisclosureSource;
+  keyPoints: string[];
+  innovationAssessment: DisclosureInnovationAssessment;
+}
+
 // New types for Step 3-4
 export type PatentType = "invention" | "utility";
 
@@ -131,7 +160,9 @@ export interface DisclosureData {
   field: TechnicalField;
   title: string;
   userId?: string;
+  mode?: DisclosureMode;
   answers: DisclosureAnswer[];
+  importSnapshot?: DisclosureImportSnapshot;
   completedAt?: number;
 }
 

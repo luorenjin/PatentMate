@@ -177,6 +177,12 @@ const QuestionWizard: React.FC<QuestionWizardProps> = ({
         </button>
       </div>
 
+      {disclosureData?.mode === 'upload' && (
+        <div className="mb-6 rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm text-cyan-900">
+          系统已根据上传资料自动预填问卷答案。你现在可以逐题校正、补充量化证据和实施细节。
+        </div>
+      )}
+
       {/* Progress bar */}
       <div className="mb-8">
         <div className="flex justify-between text-sm text-slate-500 mb-2">
