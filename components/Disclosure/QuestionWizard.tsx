@@ -191,7 +191,7 @@ const QuestionWizard: React.FC<QuestionWizardProps> = ({
         </div>
         <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
           <div
-            className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-full transition-all duration-300"
+            className="h-full bg-linear-to-r from-blue-500 to-cyan-400 rounded-full transition-all duration-300"
             style={{ width: `${progress}%` }}
           />
         </div>

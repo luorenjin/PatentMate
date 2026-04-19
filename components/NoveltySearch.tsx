@@ -711,7 +711,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
       </div>
 
       <section className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="px-8 py-7 bg-gradient-to-r from-slate-950 via-slate-900 to-cyan-950 text-white">
+        <div className="px-8 py-7 bg-linear-to-r from-slate-950 via-slate-900 to-cyan-950 text-white">
           <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6">
             <div>
               <div className="text-cyan-300 text-sm font-semibold tracking-[0.2em] uppercase mb-3">Stage 2 / 4</div>
@@ -720,13 +720,13 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                 在基础交底完成后，继续补齐关键差异点，并通过挑战式检索和保护策略把方案打磨到可起草状态。
               </p>
             </div>
-            <div className="min-w-[240px] bg-white/10 border border-white/10 rounded-2xl p-5 backdrop-blur-sm">
+            <div className="min-w-60 bg-white/10 border border-white/10 rounded-2xl p-5 backdrop-blur-sm">
               <div className="flex items-center justify-between text-sm text-slate-200 mb-2">
                 <span>交底完整度</span>
                 <span className="text-xl font-bold text-white">{draftReadiness}%</span>
               </div>
               <div className="h-3 bg-white/10 rounded-full overflow-hidden mb-3">
-                <div className="h-full bg-gradient-to-r from-cyan-300 via-sky-300 to-emerald-300 rounded-full" style={{ width: `${Math.max(8, draftReadiness)}%` }} />
+                <div className="h-full bg-linear-to-r from-cyan-300 via-sky-300 to-emerald-300 rounded-full" style={{ width: `${Math.max(8, draftReadiness)}%` }} />
               </div>
               <div className="text-xs text-slate-300">
                 {draftReadiness >= 60 ? '交底基础已具备，建议完成检索与策略确认后进入申请撰写。' : '建议先补齐技术问题、关键特征和实施方式，再做检索判断。'}
@@ -778,12 +778,12 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                   className="inline-flex items-start gap-2 px-4 py-2.5 rounded-xl bg-slate-900 text-white hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
                 >
                   {isGeneratingIdea ? (
-                    <svg className="w-4 h-4 mt-0.5 flex-shrink-0 animate-spin text-slate-300" fill="none" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4 mt-0.5 shrink-0 animate-spin text-slate-300" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                     </svg>
                   ) : (
-                    <svg className="w-4 h-4 mt-0.5 flex-shrink-0 text-yellow-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4 mt-0.5 shrink-0 text-yellow-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                     </svg>
                   )}
@@ -802,12 +802,12 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                   className="inline-flex items-start gap-2 px-4 py-2.5 rounded-xl bg-cyan-600 text-white hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
                 >
                   {isStructuring ? (
-                    <svg className="w-4 h-4 mt-0.5 flex-shrink-0 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4 mt-0.5 shrink-0 animate-spin" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                     </svg>
                   ) : (
-                    <svg className="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
                     </svg>
                   )}
@@ -825,7 +825,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                   disabled={isGeneratingIdea || isStructuring}
                   className="inline-flex items-start gap-2 px-4 py-2.5 rounded-xl bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 hover:border-slate-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
                 >
-                  <svg className="w-4 h-4 mt-0.5 flex-shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4 mt-0.5 shrink-0 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
                   </svg>
                   <div className="text-left">
@@ -861,7 +861,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                   editorId="disclosureNotes"
                   focusSignal={focusTarget?.id === 'disclosureNotes' ? focusTarget.tick : 0}
                   placeholder={'建议至少回答这些问题：\n1. 现有方案哪里不好？\n2. 你的核心改进是什么？\n3. 关键结构/算法/步骤是什么？\n4. 如何实施？\n5. 效果如何证明？'}
-                  className="min-h-[300px]"
+                  className="min-h-75"
                 />
               </div>
               <div className="mt-3 text-xs text-slate-500 leading-relaxed">
@@ -888,7 +888,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                 <div className="text-xs text-slate-400">最近 8 轮会作为上下文</div>
               </div>
 
-              <div ref={chatContainerRef} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 max-h-[360px] overflow-y-auto space-y-3 mb-4">
+              <div ref={chatContainerRef} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 max-h-90 overflow-y-auto space-y-3 mb-4">
                 {patentData.disclosureInterview.length > 0 ? (
                   patentData.disclosureInterview.map((turn, index) => (
                     <div key={`${turn.timestamp}-${index}`} className={`flex ${turn.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -925,7 +925,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                   onChange={setInterviewInput}
                   format="markdown"
                   placeholder="输入本轮补充说明，AI 会自动追问缺失信息并更新交底结构。"
-                  className="min-h-[220px]"
+                  className="min-h-55"
                 />
                 <div className="flex justify-end">
                   <button
@@ -975,7 +975,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                     editorId="technicalProblem"
                     focusSignal={focusTarget?.id === 'technicalProblem' ? focusTarget.tick : 0}
                     placeholder="一句话说清楚：为什么非做这个方案不可？"
-                    className="min-h-[180px]"
+                    className="min-h-45"
                   />
                 </div>
               </div>
@@ -992,7 +992,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                     editorId="existingSolutionIssues"
                     focusSignal={focusTarget?.id === 'existingSolutionIssues' ? focusTarget.tick : 0}
                     placeholder="从成本、精度、稳定性、效率、维护复杂度等维度写现有痛点。"
-                    className="min-h-[180px]"
+                    className="min-h-45"
                   />
                 </div>
               </div>
@@ -1011,7 +1011,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                   editorId="disclosureSummary"
                   focusSignal={focusTarget?.id === 'disclosureSummary' ? focusTarget.tick : 0}
                   placeholder="这里保存 AI 整理后的技术交底书摘要，后续会作为专利起草主输入。"
-                  className="min-h-[220px]"
+                  className="min-h-55"
                 />
               </div>
             </div>
@@ -1031,7 +1031,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                       editorId="technicalHighlights"
                       focusSignal={focusTarget?.id === 'technicalHighlights' ? focusTarget.tick : 0}
                       placeholder={'每行一条，例如：\n采用双阶段检测网络过滤背景噪声\n引入温漂补偿模块修正传感误差'}
-                      className="min-h-[220px]"
+                      className="min-h-55"
                     />
                   </div>
                 </div>
@@ -1045,7 +1045,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                       editorId="embodiments"
                       focusSignal={focusTarget?.id === 'embodiments' ? focusTarget.tick : 0}
                       placeholder={'每行一条，例如：\n实施例1：在产线边缘节点部署轻量模型\n实施例2：通过标定模板自动生成补偿参数'}
-                      className="min-h-[220px]"
+                      className="min-h-55"
                     />
                   </div>
                 </div>
@@ -1059,7 +1059,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                       editorId="advantages"
                       focusSignal={focusTarget?.id === 'advantages' ? focusTarget.tick : 0}
                       placeholder={'每行一条，例如：\n误检率降低 18%\n在低照度环境下仍保持稳定检测'}
-                      className="min-h-[200px]"
+                      className="min-h-50"
                     />
                   </div>
                 </div>
@@ -1070,7 +1070,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                     onChange={(value) => updateListField('alternativeSolutions', value)}
                     format="markdown"
                     placeholder={'每行一条，例如：\n检测模块可替换为 Transformer 架构\n结构件可从金属改为复合材料'}
-                    className="min-h-[200px]"
+                    className="min-h-50"
                   />
                 </div>
                 <div>
@@ -1083,7 +1083,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                       editorId="evidenceMaterials"
                       focusSignal={focusTarget?.id === 'evidenceMaterials' ? focusTarget.tick : 0}
                       placeholder={'每行一条，例如：\n对比实验：与传统方法相比处理时延降低 35%\n关键参数：采样频率为 200Hz'}
-                      className="min-h-[200px]"
+                      className="min-h-50"
                     />
                   </div>
                 </div>
@@ -1119,7 +1119,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                     className="w-full flex items-center justify-between px-4 py-2.5 bg-amber-50 hover:bg-amber-100/70 transition-colors"
                   >
                     <span className="flex items-center gap-2 text-sm font-semibold text-amber-800">
-                      <span className="w-2 h-2 rounded-full bg-amber-500 flex-shrink-0" />
+                      <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
                       AI 识别的缺口
                       <span className="text-xs font-normal text-amber-600">（{riskTips.length} 条）</span>
                     </span>
@@ -1147,7 +1147,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                   className="w-full flex items-center justify-between px-4 py-2.5 bg-slate-50 hover:bg-slate-100 transition-colors"
                 >
                   <span className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${patentData.claimStrategy ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${patentData.claimStrategy ? 'bg-emerald-500' : 'bg-slate-300'}`} />
                     建议的保护骨架
                     {patentData.claimStrategy && (
                       <span className="text-xs font-normal text-emerald-600">已生成</span>
@@ -1193,7 +1193,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
             <h3 className="text-lg font-bold text-slate-900">挑战式新颖性检索</h3>
             <p className="text-sm text-slate-500 mt-0.5">用现有技术反向挑战方案，在起草前补强差异点和保护边界。</p>
           </div>
-          <div className="flex items-center gap-3 flex-shrink-0">
+          <div className="flex items-center gap-3 shrink-0">
             {isSearching && (
               <span className="flex items-center gap-1.5 text-sm text-blue-600">
                 <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -1261,7 +1261,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
             <div className={`rounded-xl p-4 flex items-start gap-3 ${
               report.score >= 80 ? 'bg-emerald-50 border border-emerald-100' : 'bg-amber-50 border border-amber-100'
             }`}>
-              <svg className={`w-5 h-5 mt-0.5 flex-shrink-0 ${report.score >= 80 ? 'text-emerald-500' : 'text-amber-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className={`w-5 h-5 mt-0.5 shrink-0 ${report.score >= 80 ? 'text-emerald-500' : 'text-amber-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 {report.score >= 80
                   ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                   : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />}
@@ -1311,7 +1311,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                 <ul className="space-y-2">
                   {report.avoidanceRecommendations.map((recommendation, idx) => (
                     <li key={idx} className="flex items-start gap-2 text-sm text-blue-800">
-                      <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-200 text-blue-700 flex items-center justify-center text-xs font-semibold mt-0.5">
+                      <span className="shrink-0 w-5 h-5 rounded-full bg-blue-200 text-blue-700 flex items-center justify-center text-xs font-semibold mt-0.5">
                         {idx + 1}
                       </span>
                       <span className="flex-1">{recommendation}</span>
@@ -1339,7 +1339,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                     type="button"
                     onClick={handleOptimize}
                     disabled={isOptimizing}
-                    className="flex-shrink-0 flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    className="shrink-0 flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                   >
                     {isOptimizing ? (
                       <>
@@ -1403,7 +1403,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
                       rel="noreferrer"
                       className="flex items-start gap-3 p-3 rounded-xl border border-slate-200 hover:border-blue-300 hover:bg-blue-50 transition-all group"
                     >
-                      <svg className="w-4 h-4 mt-0.5 flex-shrink-0 text-slate-400 group-hover:text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-4 h-4 mt-0.5 shrink-0 text-slate-400 group-hover:text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                       </svg>
                       <div className="min-w-0">
@@ -1452,7 +1452,7 @@ const NoveltySearch: React.FC<NoveltySearchProps> = ({ patentData, updatePatentD
           <div className="flex items-center gap-2">
             <div className="w-24 h-1.5 bg-slate-100 rounded-full overflow-hidden">
               <div
-                className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400 rounded-full transition-all"
+                className="h-full bg-linear-to-r from-cyan-400 to-emerald-400 rounded-full transition-all"
                 style={{ width: `${Math.max(4, draftReadiness)}%` }}
               />
             </div>

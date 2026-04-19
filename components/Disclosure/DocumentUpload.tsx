@@ -354,7 +354,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
                 </div>
                 <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
                   <div
-                    className={`h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-full transition-all duration-500 ${
+                    className={`h-full bg-linear-to-r from-blue-500 to-cyan-400 rounded-full transition-all duration-500 ${
                       progress.stage === "structuring" && isProcessing
                         ? "animate-pulse"
                         : ""

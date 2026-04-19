@@ -171,7 +171,7 @@ const PatentDraft: React.FC<PatentDraftProps> = ({
                 先完成专利类型、技术领域与技术交底采集，系统再进入方案评估、申请撰写和审校定稿阶段。
               </p>
             </div>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 lg:min-w-[280px]">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 lg:min-w-70">
               <div className="text-xs text-slate-500">当前子步骤</div>
               <div className="mt-2 text-lg font-semibold text-slate-900">
                 {subSteps.find((item) => item.id === step)?.label}

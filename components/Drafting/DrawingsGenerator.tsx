@@ -44,6 +44,7 @@ const DrawingsGenerator: React.FC<DrawingsGeneratorProps> = ({
   const [diagramDescription, setDiagramDescription] = useState('');
   const [isGeneratingDiagram, setIsGeneratingDiagram] = useState(false);
   const [generatedDiagrams, setGeneratedDiagrams] = useState<Array<{
+    id: string;
     type: DiagramType;
     code: string;
     language: 'mermaid' | 'plantuml';
@@ -56,6 +57,9 @@ const DrawingsGenerator: React.FC<DrawingsGeneratorProps> = ({
   const [generatedAnnotations, setGeneratedAnnotations] = useState<ImageAnnotation[]>([]);
 
   const diagramTypes: DiagramType[] = ['flowchart', 'sequence', 'architecture', 'class', 'component', 'deployment'];
+  const resolvedTechnicalField = patentData.selectedTechnicalField ?? patentData.technicalField;
+
+  const createDiagramId = () => `generated-diagram-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   useEffect(() => {
     setEditContent(stageData.content);
@@ -100,12 +104,12 @@ const DrawingsGenerator: React.FC<DrawingsGeneratorProps> = ({
         description: diagramDescription,
         context: {
           patentTitle: patentData.title,
-          technicalField: patentData.selectedTechnicalField,
+          technicalField: resolvedTechnicalField,
           inventionContent: patentData.inventionContent,
         },
       });
 
-      setGeneratedDiagrams((prev) => [...prev, result]);
+      setGeneratedDiagrams((prev) => [...prev, { ...result, id: createDiagramId() }]);
       setDiagramDescription('');
       alert(`${getDiagramTypeName(selectedDiagramType)}生成成功！`);
     } catch (error) {
@@ -130,7 +134,7 @@ const DrawingsGenerator: React.FC<DrawingsGeneratorProps> = ({
       const annotation = generateAnnotation({
         figureNumber: currentFigureNumber,
         patentTitle: patentData.title,
-        technicalField: patentData.selectedTechnicalField,
+        technicalField: resolvedTechnicalField,
         inventionSummary: patentData.inventionContent,
         userDescription: figureDescription,
       });
@@ -183,7 +187,7 @@ const DrawingsGenerator: React.FC<DrawingsGeneratorProps> = ({
       </div>
 
       {/* 图表生成面板 */}
-      <div className="mb-6 bg-gradient-to-r from-indigo-50 to-blue-50 rounded-2xl border border-indigo-200 p-6">
+      <div className="mb-6 bg-linear-to-r from-indigo-50 to-blue-50 rounded-2xl border border-indigo-200 p-6">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h4 className="text-lg font-bold text-indigo-900 flex items-center gap-2">
@@ -270,7 +274,7 @@ const DrawingsGenerator: React.FC<DrawingsGeneratorProps> = ({
             <h5 className="text-sm font-bold text-slate-700 mb-3">已生成图表 ({generatedDiagrams.length})</h5>
             <div className="space-y-4">
               {generatedDiagrams.map((diagram, idx) => (
-                <div key={idx} className="bg-white rounded-xl border border-slate-200 p-4">
+                <div key={diagram.id} className="bg-white rounded-xl border border-slate-200 p-4">
                   <div className="flex items-center justify-between mb-3">
                     <span className="text-sm font-semibold text-slate-900">
                       {getDiagramTypeName(diagram.type)}
@@ -283,7 +287,7 @@ const DrawingsGenerator: React.FC<DrawingsGeneratorProps> = ({
                     </button>
                   </div>
                   {diagram.language === 'mermaid' ? (
-                    <MermaidRenderer code={diagram.code} />
+                    <MermaidRenderer code={diagram.code} id={diagram.id} />
                   ) : (
                     <div className="bg-slate-50 p-3 rounded-lg">
                       <pre className="text-xs text-slate-700 overflow-x-auto">{diagram.code}</pre>
@@ -300,7 +304,7 @@ const DrawingsGenerator: React.FC<DrawingsGeneratorProps> = ({
       </div>
 
       {/* 附图标注面板 */}
-      <div className="mb-6 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-2xl border border-emerald-200 p-6">
+      <div className="mb-6 bg-linear-to-r from-emerald-50 to-teal-50 rounded-2xl border border-emerald-200 p-6">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h4 className="text-lg font-bold text-emerald-900 flex items-center gap-2">

@@ -872,7 +872,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
     return (
       <div className="space-y-4">
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-          <div className="border-b border-slate-100 bg-[radial-gradient(circle_at_top_left,_rgba(186,230,253,0.45),_transparent_55%),linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-4">
+          <div className="border-b border-slate-100 bg-[radial-gradient(circle_at_top_left,rgba(186,230,253,0.45),transparent_55%),linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] p-4">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <div className="text-xs uppercase tracking-[0.22em] text-slate-500">订阅方案</div>
@@ -932,7 +932,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
               return (
                 <article
                   key={option.key}
-                  className={`rounded-[24px] border p-4 transition ${
+                  className={`rounded-3xl border p-4 transition ${
                     isCurrent
                       ? 'border-slate-900 bg-slate-900 text-white shadow-xl'
                       : isRecommended
@@ -1208,16 +1208,16 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
           </div>
 
           <div className="overflow-x-auto">
-            <table className="min-w-[1080px] w-full divide-y divide-slate-100">
+            <table className="min-w-270 w-full divide-y divide-slate-100">
               <thead className="bg-slate-50 text-left text-xs uppercase tracking-[0.18em] text-slate-500">
                 <tr>
-                  <th className="w-[188px] px-4 py-3 font-medium">成员</th>
-                  <th className="w-[188px] px-4 py-3 font-medium">邮箱</th>
-                  <th className="w-[188px] px-4 py-3 font-medium">职位</th>
-                  <th className="w-[108px] px-4 py-3 font-medium whitespace-nowrap">状态</th>
-                  <th className="w-[168px] px-4 py-3 font-medium whitespace-nowrap">角色</th>
-                  <th className="w-[132px] px-4 py-3 font-medium whitespace-nowrap">加入时间</th>
-                  <th className="w-[156px] px-4 py-3 text-right font-medium whitespace-nowrap">操作</th>
+                  <th className="w-47 px-4 py-3 font-medium">成员</th>
+                  <th className="w-47 px-4 py-3 font-medium">邮箱</th>
+                  <th className="w-47 px-4 py-3 font-medium">职位</th>
+                  <th className="w-27 px-4 py-3 font-medium whitespace-nowrap">状态</th>
+                  <th className="w-42 px-4 py-3 font-medium whitespace-nowrap">角色</th>
+                  <th className="w-33 px-4 py-3 font-medium whitespace-nowrap">加入时间</th>
+                  <th className="w-39 px-4 py-3 text-right font-medium whitespace-nowrap">操作</th>
                 </tr>
               </thead>
 
@@ -1257,7 +1257,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                           value={member.role}
                           disabled={isProtectedOwner}
                           onChange={(event) => handleMemberRoleChange(member.id, event.target.value as OrganizationMemberRole)}
-                          className="w-full min-w-[148px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 transition focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:bg-slate-100 disabled:text-slate-500"
+                          className="w-full min-w-37 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 transition focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:bg-slate-100 disabled:text-slate-500"
                         >
                           {ROLE_OPTIONS.map((option) => (
                             <option key={option.value} value={option.value} disabled={isRoleOptionDisabled(option.value, member.role)}>
@@ -1273,7 +1273,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                             <button
                               type="button"
                               onClick={() => handleActivateMember(member.id)}
-                              className="inline-flex min-w-[72px] items-center justify-center whitespace-nowrap rounded-lg bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition hover:bg-blue-100"
+                              className="inline-flex min-w-18 items-center justify-center whitespace-nowrap rounded-lg bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition hover:bg-blue-100"
                             >
                               添加
                             </button>
@@ -1283,7 +1283,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                             <button
                               type="button"
                               onClick={() => handleRemoveMember(member.id)}
-                              className="inline-flex min-w-[72px] items-center justify-center whitespace-nowrap rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-600 transition hover:bg-red-100"
+                              className="inline-flex min-w-18 items-center justify-center whitespace-nowrap rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-600 transition hover:bg-red-100"
                             >
                               移除
                             </button>
@@ -1317,7 +1317,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1360px]">
+    <div className="mx-auto w-full max-w-340">
       <div className="grid gap-5 xl:grid-cols-[248px_minmax(0,1fr)] xl:items-start">
         <aside className="space-y-3 xl:sticky xl:top-6">
           <button
@@ -1331,7 +1331,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
             返回工作台
           </button>
 
-          <div className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="text-xs uppercase tracking-[0.22em] text-slate-400">设置中心</div>
             <h1 className="mt-3 text-[28px] font-semibold leading-tight text-slate-900">账户与组织管理</h1>
 
@@ -1341,7 +1341,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
                   {displayedOrganizationName.trim().charAt(0) || 'P'}
                 </div>
                 <div className="min-w-0">
-                  <div className="break-words text-base font-semibold">{displayedOrganizationName}</div>
+                  <div className="wrap-break-word text-base font-semibold">{displayedOrganizationName}</div>
                   <div className="mt-2 flex flex-wrap gap-2 text-xs">
                     <span className="rounded-full bg-cyan-500/15 px-2.5 py-1 text-cyan-100">{planLabel}</span>
                     <span className="rounded-full bg-white/10 px-2.5 py-1 text-slate-200">{organization.members.length} 位成员</span>
@@ -1366,7 +1366,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
             </div>
           </div>
 
-          <nav className="rounded-[24px] border border-slate-200 bg-white p-2 shadow-sm">
+          <nav className="rounded-3xl border border-slate-200 bg-white p-2 shadow-sm">
             <div className="space-y-2">
               {sectionItems.map((item) => {
                 const isActive = item.id === activeSection;
@@ -1412,7 +1412,7 @@ const OrganizationSettings: React.FC<OrganizationSettingsProps> = ({
             </div>
           )}
 
-          <section className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm md:p-5">
+          <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
             <div className="flex flex-col gap-4 border-b border-slate-100 pb-4 md:flex-row md:items-end md:justify-between">
               <div>
                 <div className="inline-flex rounded-full bg-sky-50 px-3 py-1 text-xs font-medium tracking-[0.18em] text-sky-700">
