@@ -51,7 +51,7 @@ export interface SubscriptionPlanDefinition {
 export type SubscriptionPlan = "free" | "basic" | "pro" | "enterprise";
 
 export interface PlanLimits {
-  monthlyQuota: number;  // AI calls per month, -1 = unlimited
+  monthlyQuota: number; // AI calls per month, -1 = unlimited
   features: string[];
   resources?: PlanResourceDefinition[];
   label?: string;
@@ -62,9 +62,9 @@ export interface QuotaConfig {
   userId: string;
   organizationId?: string;
   plan: SubscriptionPlan;
-  monthlyQuota: number;     // Total quota for the month
-  currentUsage: number;     // Used quota this period
-  resetDate: number;        // Timestamp when quota resets
+  monthlyQuota: number; // Total quota for the month
+  currentUsage: number; // Used quota this period
+  resetDate: number; // Timestamp when quota resets
   createdAt: number;
   lastModified: number;
 }
@@ -73,7 +73,7 @@ export interface QuotaUsage {
   used: number;
   remaining: number;
   total: number;
-  percentage: number;       // 0-100
+  percentage: number; // 0-100
   resetDate: number;
 }
 
@@ -115,7 +115,17 @@ export interface ImportedDisclosureSource {
 
 export interface DisclosureImportSnapshot {
   source: ImportedDisclosureSource;
+  sourceSummary: string;
+  technicalProblem: string;
+  existingSolutionIssues: string;
   keyPoints: string[];
+  technicalHighlights: string[];
+  embodiments: string[];
+  advantages: string[];
+  alternativeSolutions: string[];
+  evidenceMaterials: string[];
+  risks: string[];
+  questionMappings: DisclosureAnswer[];
   innovationAssessment: DisclosureInnovationAssessment;
 }
 
@@ -222,7 +232,7 @@ export interface PatentData {
   createdAt: number;
 
   // Data persistence enhancement (P0-1)
-  version?: number;          // 版本号，用于冲突检测
+  version?: number; // 版本号，用于冲突检测
   deletedAt?: number | null; // 软删除时间戳，null 表示未删除
 
   // User association
@@ -266,7 +276,7 @@ export interface PatentData {
   inventionContent: string;
   descriptionOfDrawings?: string;
   drawings?: string[];
-  mermaidDiagrams?: string[];   // Mermaid diagram code, one per figure
+  mermaidDiagrams?: string[]; // Mermaid diagram code, one per figure
   detailedDescription?: string;
   claims?: string;
   abstract?: string;
@@ -277,11 +287,11 @@ export interface NoveltyReport {
   analysis: string;
   priorArtLinks: Array<{ title: string; uri: string }>;
   scoreBreakdown?: {
-    novelty: number;        // 新颖性评分 0-40
-    creativity: number;     // 创造性评分 0-40
-    utility: number;        // 实用性评分 0-20
+    novelty: number; // 新颖性评分 0-40
+    creativity: number; // 创造性评分 0-40
+    utility: number; // 实用性评分 0-20
   };
-  avoidanceRecommendations?: string[];  // 规避建议
+  avoidanceRecommendations?: string[]; // 规避建议
 }
 
 export interface ChatMessage {
@@ -301,8 +311,14 @@ export interface ReviewIssue {
   section: keyof PatentData;
   issue: string;
   suggestion: string;
-  severity?: 'critical' | 'major' | 'minor';
-  category?: '新颖性' | '创造性' | '公开充分' | '格式规范' | '权利要求' | '术语一致性';
+  severity?: "critical" | "major" | "minor";
+  category?:
+    | "新颖性"
+    | "创造性"
+    | "公开充分"
+    | "格式规范"
+    | "权利要求"
+    | "术语一致性";
 }
 
 export interface ReviewResult {

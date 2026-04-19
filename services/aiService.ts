@@ -29,8 +29,7 @@ const QWEN_BASE_URL =
 
 const MODEL_GEMINI_FAST = process.env.GEMINI_MODEL_FAST || "gemini-2.5-flash";
 const MODEL_GEMINI_PRO = process.env.GEMINI_MODEL_PRO || "gemini-2.5-pro";
-const MODEL_GEMINI_VISION =
-  process.env.GEMINI_MODEL_VISION || MODEL_GEMINI_PRO;
+const MODEL_GEMINI_VISION = process.env.GEMINI_MODEL_VISION || MODEL_GEMINI_PRO;
 const MODEL_GEMINI_IMAGE =
   process.env.GEMINI_MODEL_IMAGE || "imagen-4.0-generate-001";
 
@@ -306,11 +305,15 @@ export const generateText = async (
         if (!quotaCheck.allowed) {
           const error = new Error(quotaCheck.message || "配额不足");
           captureError(error, {
-            operation: 'generateText',
+            operation: "generateText",
             userId: options.userId,
             quotaRemaining: quotaCheck.remaining,
           });
-          addBreadcrumb('ai.quota_exceeded', quotaCheck.message || "配额不足", 'warning');
+          addBreadcrumb(
+            "ai.quota_exceeded",
+            quotaCheck.message || "配额不足",
+            "warning",
+          );
           return {
             text: "",
             groundingLinks: [],
@@ -318,14 +321,21 @@ export const generateText = async (
         }
       }
 
-      addBreadcrumb('ai.request', `generateText (${level}, ${prompt.length} chars)`, 'info');
+      addBreadcrumb(
+        "ai.request",
+        `generateText (${level}, ${prompt.length} chars)`,
+        "info",
+      );
 
       const model = getTextModel(level);
 
       if (useGemini()) {
         if (!geminiClient) {
           const error = new Error("Gemini API key is missing");
-          captureError(error, { operation: 'generateText', provider: 'gemini' });
+          captureError(error, {
+            operation: "generateText",
+            provider: "gemini",
+          });
           console.error("Gemini API key is missing.");
           return { text: "", groundingLinks: [] };
         }
@@ -361,7 +371,11 @@ export const generateText = async (
               }))
           : [];
 
-        addBreadcrumb('ai.response', `generateText completed (${response.text?.length || 0} chars)`, 'info');
+        addBreadcrumb(
+          "ai.response",
+          `generateText completed (${response.text?.length || 0} chars)`,
+          "info",
+        );
 
         // P1-1: Increment usage after successful call
         if (options?.userId && response.text) {
@@ -376,7 +390,10 @@ export const generateText = async (
 
       const qwenMessages: QwenMessage[] = [];
       if (options?.systemInstruction) {
-        qwenMessages.push({ role: "system", content: options.systemInstruction });
+        qwenMessages.push({
+          role: "system",
+          content: options.systemInstruction,
+        });
       }
       qwenMessages.push({ role: "user", content: prompt });
 
@@ -386,7 +403,11 @@ export const generateText = async (
         !!options?.jsonMode,
       );
 
-      addBreadcrumb('ai.response', `generateText completed (${text?.length || 0} chars)`, 'info');
+      addBreadcrumb(
+        "ai.response",
+        `generateText completed (${text?.length || 0} chars)`,
+        "info",
+      );
 
       // P1-1: Increment usage after successful call
       if (options?.userId && text) {
@@ -395,7 +416,11 @@ export const generateText = async (
 
       return { text, groundingLinks: [] };
     } catch (error) {
-      captureError(error as Error, { operation: 'generateText', level, provider: useGemini() ? 'gemini' : 'qwen' });
+      captureError(error as Error, {
+        operation: "generateText",
+        level,
+        provider: useGemini() ? "gemini" : "qwen",
+      });
       console.error("generateText failed:", error);
       return { text: "", groundingLinks: [] };
     }
@@ -539,7 +564,7 @@ const buildDisclosureQuestionnaireSchema = (
     .map((question, index) => {
       return [
         `${index + 1}. ${question.id}｜${question.question}`,
-        `   填写提示：${question.helpText}`,
+        `   仅在资料中存在直接依据时才允许映射：${question.helpText}`,
       ].join("\n");
     })
     .join("\n");
@@ -563,7 +588,10 @@ const normalizeDisclosureAnswerList = (
         answer: typeof item.answer === "string" ? item.answer.trim() : "",
       }))
       .filter(
-        (item) => item.questionId && item.answer && validQuestionIds.has(item.questionId),
+        (item) =>
+          item.questionId &&
+          item.answer &&
+          validQuestionIds.has(item.questionId),
       )
       .map((item) => ({
         questionId: item.questionId,
@@ -576,7 +604,9 @@ const normalizeDisclosureAnswerList = (
     return Object.entries(value as Record<string, unknown>)
       .filter(
         ([questionId, answer]) =>
-          validQuestionIds.has(questionId) && typeof answer === "string" && answer.trim(),
+          validQuestionIds.has(questionId) &&
+          typeof answer === "string" &&
+          answer.trim(),
       )
       .map(([questionId, answer]) => ({
         questionId,
@@ -755,28 +785,29 @@ export const extractStructuredDisclosureFromDocument = async (
       ? "当前资料为机械类申请，请重点提取结构构成、连接关系、运动路径、材料牌号、强度校核、加工工艺、公差和技术效果。"
       : `当前资料技术领域为${technicalField}，请优先提取与该领域审查关注点对应的关键技术特征、参数和效果证据。`;
   const prompt = `
-    请把下面上传的研发资料整理成技术交底结构化结果，供后续专利新颖性、创造性、实用性优化与申请撰写使用。
+    请先完整理解下面上传的研发资料，再整理成供后续专利评估与撰写使用的结构化交底结果。
 
     发明名称：${title}
     专利类型：${getPatentTypeLabel(patentType)}
     技术领域：${technicalField}
     ${fieldFocus}
 
-    问卷清单（你需要尽可能把资料内容映射到这些问题上）：
+    可选问卷映射参考（只有在资料中存在直接、明确依据时才允许填写 questionAnswers；绝不能为了覆盖率猜测或补全）：
     ${questionnaireSchema}
 
     原始资料文本（可能包含 OCR 噪声）：
     ${truncateForPrompt(documentText, 18000)}
 
     处理要求：
-    1. sourceSummary：用 180-260 字概括资料中的核心技术方案。
-    2. technicalProblem：提炼资料中明确要解决的技术问题或工程痛点。
-    3. existingSolutionIssues：提炼现有方案、现有结构或现有工艺的不足。
-    4. keyPoints：提炼 4-8 条资料中最值得继续保护或补充证明的技术要点。
-    5. questionAnswers：按问卷问题尽可能映射答案；若资料有依据，至少优先填写 q1、q2、q3、q4 以及与当前领域最相关的 1-3 个问题。
+    1. 必须以“材料事实”为中心组织结果，优先抽取技术问题、现有不足、核心方案、关键特征、实施方式、证据材料和风险，不要先按问卷思考。
+    2. sourceSummary：用 180-260 字概括资料中的核心技术方案。
+    3. technicalProblem：提炼资料中明确要解决的技术问题或工程痛点。
+    4. existingSolutionIssues：提炼现有方案、现有结构或现有工艺的不足。
+    5. keyPoints：提炼 4-8 条资料中最值得继续保护或补充证明的技术要点。
     6. technicalHighlights、embodiments、advantages、alternativeSolutions、evidenceMaterials、risks 的提取规则与现有技术交底一致，尤其不要把量化数据写进 alternativeSolutions。
-    7. innovationAssessment 需要分别从新颖性、创造性、实用性三个角度评估当前创新点质量，并给出 optimizationSuggestions 与 recommendedFocus。
-    8. 如资料疑似机械模板，请保持部件名称、编号、参数和装配关系的一致性。
+    7. questionAnswers 只是可选输出：仅当某个问卷问题能被资料中的原句、明确事实、明确参数或明确结构关系直接支撑时才填写；无法直接对应时必须省略，不得猜测、归纳补全或按模板硬凑。
+    8. innovationAssessment 需要分别从新颖性、创造性、实用性三个角度评估当前创新点质量，并给出 optimizationSuggestions 与 recommendedFocus。
+    9. 如资料疑似机械模板，请保持部件名称、编号、参数和装配关系的一致性。
 
     请返回 JSON：
     {
@@ -829,13 +860,17 @@ export const extractStructuredDisclosureFromDocument = async (
       sourceSummary:
         typeof result.sourceSummary === "string" ? result.sourceSummary : "",
       technicalProblem:
-        typeof result.technicalProblem === "string" ? result.technicalProblem : "",
+        typeof result.technicalProblem === "string"
+          ? result.technicalProblem
+          : "",
       existingSolutionIssues:
         typeof result.existingSolutionIssues === "string"
           ? result.existingSolutionIssues
           : "",
       keyPoints: Array.isArray(result.keyPoints)
-        ? result.keyPoints.filter((item): item is string => typeof item === "string")
+        ? result.keyPoints.filter(
+            (item): item is string => typeof item === "string",
+          )
         : [],
       answers: normalizeDisclosureAnswerList(
         result.questionAnswers,
@@ -867,7 +902,9 @@ export const extractStructuredDisclosureFromDocument = async (
           )
         : [],
       risks: Array.isArray(result.risks)
-        ? result.risks.filter((item): item is string => typeof item === "string")
+        ? result.risks.filter(
+            (item): item is string => typeof item === "string",
+          )
         : [],
       innovationAssessment: normalizeInnovationAssessment(
         result.innovationAssessment,
@@ -974,11 +1011,23 @@ export const performNoveltySearch = async (
       // 处理评分细分
       if (report.scoreBreakdown) {
         const breakdown = report.scoreBreakdown;
-        if (typeof breakdown.novelty !== 'number' || breakdown.novelty < 0 || breakdown.novelty > 40) {
+        if (
+          typeof breakdown.novelty !== "number" ||
+          breakdown.novelty < 0 ||
+          breakdown.novelty > 40
+        ) {
           delete report.scoreBreakdown;
-        } else if (typeof breakdown.creativity !== 'number' || breakdown.creativity < 0 || breakdown.creativity > 40) {
+        } else if (
+          typeof breakdown.creativity !== "number" ||
+          breakdown.creativity < 0 ||
+          breakdown.creativity > 40
+        ) {
           delete report.scoreBreakdown;
-        } else if (typeof breakdown.utility !== 'number' || breakdown.utility < 0 || breakdown.utility > 20) {
+        } else if (
+          typeof breakdown.utility !== "number" ||
+          breakdown.utility < 0 ||
+          breakdown.utility > 20
+        ) {
           delete report.scoreBreakdown;
         }
       }
@@ -1916,10 +1965,13 @@ export const runFinalPatentReview = async (
     // 确保每个 issue 都有 severity 和 category
     result.detailedIssues = result.detailedIssues.map((issue) => {
       if (!issue.severity) {
-        issue.severity = issue.issue.includes('不符合') || issue.issue.includes('错误') ? 'major' : 'minor';
+        issue.severity =
+          issue.issue.includes("不符合") || issue.issue.includes("错误")
+            ? "major"
+            : "minor";
       }
       if (!issue.category) {
-        issue.category = '格式规范';
+        issue.category = "格式规范";
       }
       return issue;
     });

@@ -37,12 +37,14 @@ const getInitialStep = (patentData: PatentData): Step => {
   if (!patentData.selectedTechnicalField || !patentData.title?.trim()) return 'field_selection';
 
   const mode = patentData.disclosureData?.mode;
+  const hasImportSnapshot = Boolean(patentData.disclosureData?.importSnapshot);
   const answeredCount = patentData.disclosureData?.answers.filter((item) => item.answer.trim().length > 0).length || 0;
 
   if (patentData.status === 'disclosure_review') return 'summary';
+  if (mode === 'upload' && hasImportSnapshot) return 'upload';
   if (mode === 'upload' && answeredCount === 0) return 'upload';
-  if (answeredCount > 0) return 'wizard';
   if (mode === 'upload') return 'upload';
+  if (answeredCount > 0) return 'wizard';
   if (mode === 'questionnaire') return 'wizard';
   return 'mode_selection';
 };
@@ -253,13 +255,7 @@ const PatentDraft: React.FC<PatentDraftProps> = ({
       {step === 'summary' && (
         <DisclosureSummary
           disclosureData={disclosureData}
-          onEdit={() => setStep(
-            disclosureData.answers.some((item) => item.answer.trim().length > 0)
-              ? 'wizard'
-              : disclosureData.mode === 'upload'
-                ? 'upload'
-                : 'wizard',
-          )}
+          onEdit={() => setStep(disclosureData.mode === 'upload' ? 'upload' : 'wizard')}
           onConfirm={handleSummaryConfirm}
         />
       )}

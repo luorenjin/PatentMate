@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from "react";
 
 import {
   extractStructuredDisclosureFromDocument,
-  type DocumentDisclosureExtractionResult,
 } from "../../services/aiService";
 import {
   getSupportedDisclosureFileAccept,
@@ -11,17 +10,6 @@ import {
 } from "../../services/fileIngestionService";
 import { generateDeepQuestionnaire } from "../../services/disclosureTemplateService";
 import type { DisclosureData, PatentType, TechnicalField } from "../../types";
-
-const CORE_QUESTION_IDS = new Set(["q1", "q2", "q3", "q4"]);
-
-const joinLines = (items: string[], maxItems?: number): string => {
-  const normalizedItems = items
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .slice(0, maxItems ?? items.length);
-
-  return normalizedItems.join("\n");
-};
 
 const dedupeAnswerList = (answers: DisclosureData["answers"]): DisclosureData["answers"] => {
   const latestAnswers = new Map<string, DisclosureData["answers"][number]>();
@@ -35,122 +23,6 @@ const dedupeAnswerList = (answers: DisclosureData["answers"]): DisclosureData["a
   });
 
   return Array.from(latestAnswers.values());
-};
-
-const findMatchingItems = (items: string[], pattern: RegExp): string[] => {
-  return items.filter((item) => pattern.test(item));
-};
-
-const buildFallbackAnswer = (
-  questionId: string,
-  structured: DocumentDisclosureExtractionResult,
-): string => {
-  const allNarrativeItems = [
-    ...structured.keyPoints,
-    ...structured.technicalHighlights,
-    ...structured.embodiments,
-    ...structured.advantages,
-    ...structured.alternativeSolutions,
-    ...structured.evidenceMaterials,
-  ];
-
-  if (questionId === "q1") {
-    return structured.technicalProblem || structured.keyPoints[0] || "";
-  }
-
-  if (questionId === "q2") {
-    return structured.existingSolutionIssues || structured.risks[0] || "";
-  }
-
-  if (questionId === "q3") {
-    return [
-      structured.sourceSummary,
-      joinLines(structured.embodiments, 3),
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-  }
-
-  if (questionId === "q4") {
-    return joinLines(
-      structured.technicalHighlights.length > 0
-        ? structured.technicalHighlights
-        : structured.keyPoints,
-      5,
-    );
-  }
-
-  if (questionId.startsWith("q_evidence_")) {
-    const index = Number(questionId.split("_").pop()) - 1;
-    return structured.evidenceMaterials[index] || "";
-  }
-
-  if (questionId === "q_mech_1") {
-    return joinLines(
-      findMatchingItems(
-        allNarrativeItems,
-        /结构|部件|组件|机构|连接|装配|传动|定位|运动|真空|吸附|密封|夹持/,
-      ).length > 0
-        ? findMatchingItems(
-            allNarrativeItems,
-            /结构|部件|组件|机构|连接|装配|传动|定位|运动|真空|吸附|密封|夹持/,
-          )
-        : structured.embodiments,
-      4,
-    );
-  }
-
-  if (questionId === "q_mech_2") {
-    return joinLines(
-      findMatchingItems(
-        [...structured.evidenceMaterials, ...allNarrativeItems],
-        /材料|钢|铝|铜|硬度|强度|应力|屈服|刚性|耐磨|承载|模量|热处理/,
-      ),
-      3,
-    );
-  }
-
-  if (questionId === "q_mech_3") {
-    return joinLines(
-      findMatchingItems(
-        allNarrativeItems,
-        /加工|制造|装配|焊接|切割|铣削|车削|热处理|表面|公差|工艺|成型/,
-      ),
-      4,
-    );
-  }
-
-  return "";
-};
-
-const mergeStructuredAnswers = (
-  questions: ReturnType<typeof generateDeepQuestionnaire>,
-  structured: DocumentDisclosureExtractionResult,
-): DisclosureData["answers"] => {
-  const timestamp = Date.now();
-  const answerMap = new Map(
-    structured.answers.map((answer) => [answer.questionId, answer]),
-  );
-
-  questions.forEach((question) => {
-    const existingAnswer = answerMap.get(question.id);
-    if (existingAnswer?.answer.trim()) {
-      return;
-    }
-
-    const fallbackAnswer = buildFallbackAnswer(question.id, structured).trim();
-    if (!fallbackAnswer) {
-      return;
-    }
-
-    answerMap.set(question.id, {
-      questionId: question.id,
-      answer: fallbackAnswer,
-      lastModified: timestamp,
-    });
-  });
-
-  return dedupeAnswerList(Array.from(answerMap.values()));
 };
 
 const getProgressPercentByStage = (
@@ -232,8 +104,6 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<DocumentIngestionProgress | null>(null);
   const [structuringProgress, setStructuringProgress] = useState<number>(72);
-  const [structuredPreview, setStructuredPreview] =
-    useState<DocumentDisclosureExtractionResult | null>(null);
   const [importedDisclosure, setImportedDisclosure] = useState<DisclosureData | null>(
     disclosureData?.mode === "upload" &&
       ((disclosureData.importSnapshot?.source.fileName?.trim().length || 0) > 0 ||
@@ -248,31 +118,18 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
     (item) => item.answer.trim().length > 0,
   ).length || 0;
   const hasParsedImport = Boolean(importedDisclosure?.importSnapshot);
-  const evidenceQuestionIds = questions
-    .filter((question) => question.id.startsWith("q_evidence_"))
-    .map((question) => question.id);
-  const fieldQuestionIds = questions
-    .filter(
-      (question) =>
-        !CORE_QUESTION_IDS.has(question.id) &&
-        !question.id.startsWith("q_evidence_"),
-    )
-    .map((question) => question.id);
-  const answeredQuestionIds = new Set(
-    (importedDisclosure?.answers || [])
-      .filter((item) => item.answer.trim().length > 0)
-      .map((item) => item.questionId),
+  const mappedQuestionCount = activeSnapshot?.questionMappings.length || answeredCount;
+  const hasSummary = Boolean(activeSnapshot?.sourceSummary.trim());
+  const hasTechnicalProblem = Boolean(activeSnapshot?.technicalProblem.trim());
+  const hasImplementationDetail = Boolean(
+    (activeSnapshot?.technicalHighlights.length || 0) > 0 ||
+      (activeSnapshot?.embodiments.length || 0) > 0 ||
+      (activeSnapshot?.keyPoints.length || 0) > 0,
   );
-  const coreAnswered = Array.from(CORE_QUESTION_IDS).filter((id) => answeredQuestionIds.has(id)).length;
-  const fieldAnswered = fieldQuestionIds.filter((id) => answeredQuestionIds.has(id)).length;
-  const evidenceAnswered = evidenceQuestionIds.filter((id) => answeredQuestionIds.has(id)).length;
-  const minimumSummaryAnswers = Math.max(4, Math.ceil(questions.length * 0.6));
+  const canReviewStructuredResult = hasSummary && hasTechnicalProblem && hasImplementationDetail;
   const canGoToSummary =
     hasParsedImport &&
-    answeredCount >= minimumSummaryAnswers &&
-    coreAnswered >= Math.min(4, questions.length) &&
-    (fieldQuestionIds.length === 0 || fieldAnswered >= 1) &&
-    (evidenceQuestionIds.length === 0 || evidenceAnswered >= 1);
+    canReviewStructuredResult;
 
   useEffect(() => {
     if (progress?.stage !== "structuring" || !isProcessing) {
@@ -307,7 +164,6 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
     const file = event.target.files?.[0] || null;
     setSelectedFile(file);
     setImportedDisclosure(null);
-    setStructuredPreview(null);
     setProgress(null);
     setError(null);
   };
@@ -325,7 +181,6 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
 
     setIsProcessing(true);
     setError(null);
-    setStructuredPreview(null);
 
     try {
       const ingested = await ingestDisclosureDocument(selectedFile, {
@@ -352,7 +207,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
         ingested.extractedText,
         { userId: disclosureData?.userId },
       );
-      const mergedAnswers = mergeStructuredAnswers(questions, structured);
+      const mappedAnswers = dedupeAnswerList(structured.answers);
 
       const nextDisclosureData: DisclosureData = {
         type: patentType,
@@ -360,7 +215,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
         title,
         userId: disclosureData?.userId,
         mode: "upload",
-        answers: mergedAnswers,
+        answers: mappedAnswers,
         importSnapshot: {
           source: {
             fileName: selectedFile.name,
@@ -373,13 +228,22 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
               structured.sourceSummary || ingested.extractedText.slice(0, 260),
             warnings: ingested.warnings,
           },
+          sourceSummary: structured.sourceSummary,
+          technicalProblem: structured.technicalProblem,
+          existingSolutionIssues: structured.existingSolutionIssues,
           keyPoints: structured.keyPoints,
+          technicalHighlights: structured.technicalHighlights,
+          embodiments: structured.embodiments,
+          advantages: structured.advantages,
+          alternativeSolutions: structured.alternativeSolutions,
+          evidenceMaterials: structured.evidenceMaterials,
+          risks: structured.risks,
+          questionMappings: mappedAnswers,
           innovationAssessment: structured.innovationAssessment,
         },
       };
 
       setImportedDisclosure(nextDisclosureData);
-      setStructuredPreview(structured);
       setProgress({
         stage: "completed",
         current: 1,
@@ -387,7 +251,15 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
         message: "资料整理完成，可写入技术交底。",
       });
 
-      if (!mergedAnswers.length && !structured.sourceSummary.trim()) {
+      const hasStructuredUnderstanding = Boolean(
+        structured.sourceSummary.trim() ||
+          structured.technicalProblem.trim() ||
+          structured.keyPoints.length > 0 ||
+          structured.technicalHighlights.length > 0 ||
+          structured.embodiments.length > 0,
+      );
+
+      if (!hasStructuredUnderstanding) {
         setError("资料已读取，但未识别出足够的交底内容，建议切换到问卷继续补充。");
       }
     } catch (processingError) {
@@ -432,7 +304,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
         <div>
           <h2 className="text-2xl font-bold text-slate-900 mb-2">上传研发资料</h2>
           <p className="text-slate-500">
-            支持 DOCX 与 PDF。系统会自动提取交底内容，并从新颖性、创造性、实用性角度给出优化建议。
+            支持 DOCX 与 PDF。系统会先理解资料中的技术事实，再整理出交底摘要、关键特征、实施方式与证据缺口，并只对有明确依据的问题生成草稿。
           </p>
         </div>
         <button
@@ -542,25 +414,20 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
             </div>
 
             <div className="mt-4 text-sm text-slate-500 leading-6">
-              上传资料更适合作为交底初稿。系统会先自动预填问卷，但研发资料通常仍缺少专利视角下的发明目的、现有技术缺陷、对比数据和保护边界。
-              建议先进入问卷补充；只有当自动回填覆盖较完整时，再直接进入确认页。
+              上传资料更适合作为交底初稿。系统会先整理材料内容，再把少量可直接对应的问题生成草稿；资料通常仍缺少专利视角下的保护边界、量化对比和补强论证。
+              建议先检查整理结果，再决定是直接确认还是继续问卷补充。
             </div>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-            <div className="text-sm font-semibold text-slate-700 mb-3">本次将回填的问卷范围</div>
-            <div className="text-sm text-slate-600 leading-6 mb-4">
-              当前技术领域为 {technicalField}，系统会尝试将资料内容映射到 {questions.length} 个交底问题中。
+            <div className="text-sm font-semibold text-slate-700 mb-3">上传整理策略</div>
+            <div className="space-y-3 text-sm text-slate-600 leading-6">
+              <div>1. 先提取资料摘要、技术问题、现有不足、关键特征、实施方式、证据与风险。</div>
+              <div>2. 仅在材料存在直接依据时，才生成问卷草稿，不再为了覆盖率自动补空。</div>
+              <div>3. 若整理结果不完整，建议继续问卷补充，而不是直接确认交底。</div>
             </div>
-            <div className="space-y-2">
-              {questions.slice(0, 6).map((question) => (
-                <div key={question.id} className="text-sm text-slate-500">
-                  {question.id} · {question.question}
-                </div>
-              ))}
-              {questions.length > 6 && (
-                <div className="text-sm text-slate-400">还有 {questions.length - 6} 个问题将自动尝试回填。</div>
-              )}
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
+              当前领域：{technicalField} · 可映射问卷总数 {questions.length} 项
             </div>
           </div>
         </div>
@@ -580,7 +447,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
               </p>
             </div>
             <div className="rounded-2xl border border-slate-200 px-4 py-3 bg-slate-50 text-sm text-slate-600">
-              已回填 {answeredCount} / {questions.length} 个问题
+              已识别 {activeSnapshot.keyPoints.length} 条保护要点 · 可直接映射 {mappedQuestionCount} / {questions.length} 个问题
             </div>
           </div>
 
@@ -590,8 +457,8 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
               : "border-amber-200 bg-amber-50 text-amber-800"
           }`}>
             {canGoToSummary
-              ? "自动回填已覆盖核心交底项，你可以直接进入确认页，但仍建议先抽查并补齐量化证据。"
-              : "当前自动回填还不足以直接确认，建议先写入并继续问卷补充，重点补充发明目的、现有技术缺陷和量化证据。"}
+              ? "已识别出可用于确认交底的核心材料信息。你可以直接进入确认页，但仍建议补齐量化证据、保护边界和对比论证。"
+              : "当前识别出的材料信息仍不足以直接确认，建议先写入并继续问卷补充，重点补充发明目的、现有技术缺陷、量化证据和实施细节。"}
           </div>
 
           <div className="grid grid-cols-1 xl:grid-cols-[1fr_1fr] gap-6">
@@ -599,26 +466,24 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
               <div>
                 <div className="text-sm font-semibold text-slate-700 mb-2">资料摘要</div>
                 <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 text-sm text-slate-700 leading-6 whitespace-pre-wrap">
-                  {activeSnapshot.source.extractedSummary || "暂无摘要。"}
+                  {activeSnapshot.sourceSummary || activeSnapshot.source.extractedSummary || "暂无摘要。"}
                 </div>
               </div>
 
-              {structuredPreview && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="text-sm font-semibold text-slate-700 mb-2">自动提炼的技术问题</div>
-                    <div className="text-sm text-slate-600 leading-6 whitespace-pre-wrap">
-                      {structuredPreview.technicalProblem || "未稳定识别，建议人工补充。"}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="text-sm font-semibold text-slate-700 mb-2">自动提炼的现有技术不足</div>
-                    <div className="text-sm text-slate-600 leading-6 whitespace-pre-wrap">
-                      {structuredPreview.existingSolutionIssues || "未稳定识别，建议人工补充。"}
-                    </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="text-sm font-semibold text-slate-700 mb-2">自动提炼的技术问题</div>
+                  <div className="text-sm text-slate-600 leading-6 whitespace-pre-wrap">
+                    {activeSnapshot.technicalProblem || "未稳定识别，建议人工补充。"}
                   </div>
                 </div>
-              )}
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="text-sm font-semibold text-slate-700 mb-2">自动提炼的现有技术不足</div>
+                  <div className="text-sm text-slate-600 leading-6 whitespace-pre-wrap">
+                    {activeSnapshot.existingSolutionIssues || "未稳定识别，建议人工补充。"}
+                  </div>
+                </div>
+              </div>
 
               <div>
                 <div className="text-sm font-semibold text-slate-700 mb-2">建议优先保护/补强的要点</div>
@@ -635,9 +500,46 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
                   )}
                 </div>
               </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm font-semibold text-slate-700 mb-2">实施方式与结构细节</div>
+                <div className="space-y-2 text-sm text-slate-600">
+                  {activeSnapshot.embodiments.length > 0 ? (
+                    activeSnapshot.embodiments.map((item) => <div key={item}>{item}</div>)
+                  ) : (
+                    <div className="text-slate-400">暂无稳定识别的实施方式，建议继续问卷补充。</div>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div className="space-y-4">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm font-semibold text-slate-700 mb-2">关键技术特征</div>
+                <div className="space-y-2 text-sm text-slate-600">
+                  {activeSnapshot.technicalHighlights.length > 0 ? (
+                    activeSnapshot.technicalHighlights.map((item) => (
+                      <div key={item}>{item}</div>
+                    ))
+                  ) : (
+                    <div className="text-slate-400">暂无提炼结果。</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm font-semibold text-slate-700 mb-2">证据材料与量化信息</div>
+                <div className="space-y-2 text-sm text-slate-600">
+                  {activeSnapshot.evidenceMaterials.length > 0 ? (
+                    activeSnapshot.evidenceMaterials.map((item) => (
+                      <div key={item}>{item}</div>
+                    ))
+                  ) : (
+                    <div className="text-slate-400">资料中未稳定识别到可直接引用的量化证据。</div>
+                  )}
+                </div>
+              </div>
+
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
                 <div>
                   <div className="text-sm font-semibold text-slate-700">新颖性</div>
@@ -676,35 +578,54 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
                   )}
                 </div>
               </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="text-sm font-semibold text-slate-700 mb-2">可直接映射的问题草稿</div>
+                <div className="space-y-2 text-sm text-slate-600">
+                  {activeSnapshot.questionMappings.length > 0 ? (
+                    activeSnapshot.questionMappings.map((item) => {
+                      const matchedQuestion = questions.find((question) => question.id === item.questionId);
+                      return (
+                        <div key={item.questionId} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                          <div className="font-medium text-slate-700">
+                            {matchedQuestion?.question || item.questionId}
+                          </div>
+                          <div className="mt-1 whitespace-pre-wrap">{item.answer}</div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="text-slate-400">当前没有足够明确的问题映射草稿，建议通过问卷继续补充。</div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
-          {structuredPreview && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm font-semibold text-slate-700 mb-2">关键技术特征</div>
-                <div className="space-y-2 text-sm text-slate-600">
-                  {structuredPreview.technicalHighlights.length > 0 ? (
-                    structuredPreview.technicalHighlights.map((item) => (
-                      <div key={item}>{item}</div>
-                    ))
-                  ) : (
-                    <div className="text-slate-400">暂无提炼结果。</div>
-                  )}
-                </div>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm font-semibold text-slate-700 mb-2">风险提示</div>
-                <div className="space-y-2 text-sm text-slate-600">
-                  {structuredPreview.risks.length > 0 ? (
-                    structuredPreview.risks.map((item) => <div key={item}>{item}</div>)
-                  ) : (
-                    <div className="text-slate-400">暂无风险提示。</div>
-                  )}
-                </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-700 mb-2">潜在替代或变体方案</div>
+              <div className="space-y-2 text-sm text-slate-600">
+                {activeSnapshot.alternativeSolutions.length > 0 ? (
+                  activeSnapshot.alternativeSolutions.map((item) => (
+                    <div key={item}>{item}</div>
+                  ))
+                ) : (
+                  <div className="text-slate-400">暂无明确的替代方案线索。</div>
+                )}
               </div>
             </div>
-          )}
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-700 mb-2">风险提示</div>
+              <div className="space-y-2 text-sm text-slate-600">
+                {activeSnapshot.risks.length > 0 ? (
+                  activeSnapshot.risks.map((item) => <div key={item}>{item}</div>)
+                ) : (
+                  <div className="text-slate-400">暂无风险提示。</div>
+                )}
+              </div>
+            </div>
+          </div>
 
           {activeSnapshot.source.warnings.length > 0 && (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 space-y-1">

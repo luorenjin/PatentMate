@@ -29,6 +29,10 @@ const DisclosureSummary: React.FC<DisclosureSummaryProps> = ({
   const answeredCount = questions.filter((question) => getAnswer(question.id).trim().length > 0).length;
   const totalQuestions = questions.length;
   const importSnapshot = disclosureData.importSnapshot;
+  const isUploadMode = disclosureData.mode === 'upload' && Boolean(importSnapshot);
+  const displayQuestions = isUploadMode
+    ? questions.filter((question) => getAnswer(question.id).trim().length > 0)
+    : questions;
 
   return (
     <div className="max-w-3xl mx-auto">
@@ -61,7 +65,7 @@ const DisclosureSummary: React.FC<DisclosureSummaryProps> = ({
         </div>
       </div>
 
-      {disclosureData.mode === 'upload' && importSnapshot && (
+      {isUploadMode && importSnapshot && (
         <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm mb-6 space-y-5">
           <div>
             <div className="text-xs text-slate-500 mb-1">资料来源</div>
@@ -77,7 +81,70 @@ const DisclosureSummary: React.FC<DisclosureSummaryProps> = ({
           <div>
             <div className="text-xs text-slate-500 mb-2">资料摘要</div>
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 leading-6 whitespace-pre-wrap">
-              {importSnapshot.source.extractedSummary || '暂无摘要。'}
+              {importSnapshot.sourceSummary || importSnapshot.source.extractedSummary || '暂无摘要。'}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-700 mb-2">技术问题</div>
+              <div className="text-sm text-slate-600 leading-6 whitespace-pre-wrap">
+                {importSnapshot.technicalProblem || '暂无稳定识别结果。'}
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-700 mb-2">现有技术不足</div>
+              <div className="text-sm text-slate-600 leading-6 whitespace-pre-wrap">
+                {importSnapshot.existingSolutionIssues || '暂无稳定识别结果。'}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-700 mb-2">关键技术特征</div>
+              <div className="space-y-2 text-sm text-slate-600">
+                {importSnapshot.technicalHighlights.length > 0 ? (
+                  importSnapshot.technicalHighlights.map((item) => <div key={item}>{item}</div>)
+                ) : importSnapshot.keyPoints.length > 0 ? (
+                  importSnapshot.keyPoints.map((item) => <div key={item}>{item}</div>)
+                ) : (
+                  <div className="text-slate-400">暂无提炼结果。</div>
+                )}
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-700 mb-2">实施方式与结构细节</div>
+              <div className="space-y-2 text-sm text-slate-600">
+                {importSnapshot.embodiments.length > 0 ? (
+                  importSnapshot.embodiments.map((item) => <div key={item}>{item}</div>)
+                ) : (
+                  <div className="text-slate-400">暂无实施方式摘要。</div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-700 mb-2">证据材料</div>
+              <div className="space-y-2 text-sm text-slate-600">
+                {importSnapshot.evidenceMaterials.length > 0 ? (
+                  importSnapshot.evidenceMaterials.map((item) => <div key={item}>{item}</div>)
+                ) : (
+                  <div className="text-slate-400">暂无稳定识别的量化证据。</div>
+                )}
+              </div>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-700 mb-2">风险提示</div>
+              <div className="space-y-2 text-sm text-slate-600">
+                {importSnapshot.risks.length > 0 ? (
+                  importSnapshot.risks.map((item) => <div key={item}>{item}</div>)
+                ) : (
+                  <div className="text-slate-400">暂无风险提示。</div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -120,8 +187,24 @@ const DisclosureSummary: React.FC<DisclosureSummaryProps> = ({
       )}
 
       {/* Answers summary */}
+      <div className="mb-4">
+        <h3 className="text-lg font-semibold text-slate-900">
+          {isUploadMode ? '问卷映射与人工补充' : '问卷答案汇总'}
+        </h3>
+        <p className="mt-1 text-sm text-slate-500">
+          {isUploadMode
+            ? '上传模式下这里只展示已经映射或补充的问卷项，避免确认页再次被题库主导。'
+            : '请确认以下问卷答案是否准确。'}
+        </p>
+      </div>
       <div className="space-y-4 mb-8">
-        {questions.map((question) => {
+        {displayQuestions.length === 0 && isUploadMode && (
+          <div className="bg-white rounded-xl border border-slate-200 p-4 text-sm text-slate-500">
+            当前没有可直接映射的问卷项，建议返回上传结果页或继续问卷补充。
+          </div>
+        )}
+
+        {displayQuestions.map((question) => {
           const answer = getAnswer(question.id);
           return (
             <div

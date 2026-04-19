@@ -152,7 +152,11 @@ const normalizeDisclosureImportSnapshot = (
     snapshot.innovationAssessment,
   );
 
-  if (!sourceValue || typeof sourceValue !== "object" || !innovationAssessment) {
+  if (
+    !sourceValue ||
+    typeof sourceValue !== "object" ||
+    !innovationAssessment
+  ) {
     return undefined;
   }
 
@@ -168,14 +172,42 @@ const normalizeDisclosureImportSnapshot = (
         typeof source.pageCount === "number" ? source.pageCount : undefined,
       usedOcr: source.usedOcr === true,
       extractedAt:
-        typeof source.extractedAt === "number" ? source.extractedAt : Date.now(),
+        typeof source.extractedAt === "number"
+          ? source.extractedAt
+          : Date.now(),
       extractedSummary:
         typeof source.extractedSummary === "string"
           ? source.extractedSummary
           : "",
       warnings: normalizeStringArray(source.warnings),
     },
+    sourceSummary:
+      typeof snapshot.sourceSummary === "string" ? snapshot.sourceSummary : "",
+    technicalProblem:
+      typeof snapshot.technicalProblem === "string"
+        ? snapshot.technicalProblem
+        : "",
+    existingSolutionIssues:
+      typeof snapshot.existingSolutionIssues === "string"
+        ? snapshot.existingSolutionIssues
+        : "",
     keyPoints: normalizeStringArray(snapshot.keyPoints),
+    technicalHighlights: normalizeStringArray(snapshot.technicalHighlights),
+    embodiments: normalizeStringArray(snapshot.embodiments),
+    advantages: normalizeStringArray(snapshot.advantages),
+    alternativeSolutions: normalizeStringArray(snapshot.alternativeSolutions),
+    evidenceMaterials: normalizeStringArray(snapshot.evidenceMaterials),
+    risks: normalizeStringArray(snapshot.risks),
+    questionMappings: Array.isArray(snapshot.questionMappings)
+      ? (snapshot.questionMappings as DisclosureAnswer[]).filter(
+          (item): item is DisclosureAnswer =>
+            typeof item === "object" &&
+            item !== null &&
+            typeof item.questionId === "string" &&
+            typeof item.answer === "string" &&
+            typeof item.lastModified === "number",
+        )
+      : [],
     innovationAssessment,
   };
 };
@@ -395,7 +427,9 @@ const filterActivePatents = (patents: PatentData[]): PatentData[] => {
 };
 
 const sortPatentsByModified = (patents: PatentData[]): PatentData[] => {
-  return [...patents].sort((left, right) => right.lastModified - left.lastModified);
+  return [...patents].sort(
+    (left, right) => right.lastModified - left.lastModified,
+  );
 };
 
 const writePatentsToCache = (patents: PatentData[]): void => {
@@ -443,9 +477,10 @@ const mapPatentToRow = (patent: PatentData): PatentProjectRow => {
 };
 
 const mapRowToPatent = (row: Partial<PatentProjectRow>): PatentData => {
-  const payload = row.payload && typeof row.payload === "object"
-    ? (row.payload as Partial<PatentData>)
-    : {};
+  const payload =
+    row.payload && typeof row.payload === "object"
+      ? (row.payload as Partial<PatentData>)
+      : {};
 
   return normalizePatentData({
     ...payload,
@@ -497,7 +532,9 @@ const mergeRemotePatentsIntoCache = (
   return mergedPatents;
 };
 
-const persistPatentToSupabase = async (patent: PatentData): Promise<Error | null> => {
+const persistPatentToSupabase = async (
+  patent: PatentData,
+): Promise<Error | null> => {
   if (!supabase) {
     return null;
   }
@@ -568,7 +605,11 @@ const syncPatentPayloadToSupabase = async (
     .eq("id", patent.id)
     .select("id");
 
-  if (!fallbackError && Array.isArray(fallbackData) && fallbackData.length > 0) {
+  if (
+    !fallbackError &&
+    Array.isArray(fallbackData) &&
+    fallbackData.length > 0
+  ) {
     return null;
   }
 
@@ -590,7 +631,9 @@ const loadPatentsFromSupabase = async (
     query = query.eq("user_id", filters.userId);
   }
 
-  const { data, error } = await query.order("last_modified", { ascending: false });
+  const { data, error } = await query.order("last_modified", {
+    ascending: false,
+  });
 
   if (error) {
     if (isSupabaseRelationMissingError(error)) {
@@ -677,11 +720,13 @@ export const getPatents = (includeDeleted = false): PatentData[] => {
     if (!data) return [];
 
     const parsed = JSON.parse(data) as Array<Partial<PatentData>>;
-    const normalized = Array.isArray(parsed) ? parsed.map(normalizePatentData) : [];
+    const normalized = Array.isArray(parsed)
+      ? parsed.map(normalizePatentData)
+      : [];
 
     // Filter out soft-deleted patents by default
     if (!includeDeleted) {
-      return normalized.filter(patent => !patent.deletedAt);
+      return normalized.filter((patent) => !patent.deletedAt);
     }
 
     return normalized;
@@ -697,7 +742,10 @@ export const getPatents = (includeDeleted = false): PatentData[] => {
  * @param includeDeleted 是否包含已删除的项目（默认为 true，单项查询时允许访问已删除数据）。
  * @returns 找到时返回规范化后的项目，否则返回 undefined。
  */
-export const getPatentById = (id: string, includeDeleted = true): PatentData | undefined => {
+export const getPatentById = (
+  id: string,
+  includeDeleted = true,
+): PatentData | undefined => {
   const patents = getPatents(includeDeleted);
   return patents.find((p) => p.id === id);
 };
@@ -742,7 +790,9 @@ export const savePatentToStorage = async (
  * 保留 30 天以供恢复，之后需手动清理。
  * @param id 项目唯一标识。
  */
-export const deletePatentFromStorage = async (id: string): Promise<Error | null> => {
+export const deletePatentFromStorage = async (
+  id: string,
+): Promise<Error | null> => {
   const patent = getPatentById(id);
   if (!patent) {
     return new Error("Patent not found");
@@ -784,7 +834,9 @@ export const deletePatentFromStorage = async (id: string): Promise<Error | null>
  * 恢复已软删除的专利项目。
  * @param id 项目唯一标识。
  */
-export const restorePatentFromStorage = async (id: string): Promise<Error | null> => {
+export const restorePatentFromStorage = async (
+  id: string,
+): Promise<Error | null> => {
   const patent = getPatentById(id);
   if (!patent) {
     return new Error("Patent not found");
@@ -835,7 +887,7 @@ export const purgeOldDeletedPatents = async (daysOld = 30): Promise<number> => {
   const cutoffTime = Date.now() - daysOld * 24 * 60 * 60 * 1000;
   const allPatents = getPatents(true); // Include deleted
   const toPurge = allPatents.filter(
-    patent => patent.deletedAt && patent.deletedAt < cutoffTime
+    (patent) => patent.deletedAt && patent.deletedAt < cutoffTime,
   );
 
   if (toPurge.length === 0) {
@@ -844,7 +896,7 @@ export const purgeOldDeletedPatents = async (daysOld = 30): Promise<number> => {
 
   // Remove from local cache
   const remainingPatents = allPatents.filter(
-    patent => !patent.deletedAt || patent.deletedAt >= cutoffTime
+    (patent) => !patent.deletedAt || patent.deletedAt >= cutoffTime,
   );
   writePatentsToCache(remainingPatents);
 
@@ -857,7 +909,10 @@ export const purgeOldDeletedPatents = async (daysOld = 30): Promise<number> => {
         .eq("id", patent.id);
 
       if (error) {
-        console.error(`Failed to purge patent ${patent.id} from Supabase:`, error);
+        console.error(
+          `Failed to purge patent ${patent.id} from Supabase:`,
+          error,
+        );
       }
     }
   }
